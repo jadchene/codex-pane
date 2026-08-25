@@ -1,0 +1,71 @@
+<script setup lang="ts">
+import { computed, ref } from "vue";
+import type { PendingServerRequest } from "../types";
+import { useWorkspaceStore } from "../stores/workspace";
+import PaneView from "./PaneView.vue";
+
+const props = defineProps<{ index: number }>();
+const emit = defineEmits<{ openSessions: [paneId: string] }>();
+const store = useWorkspaceStore();
+const pane = computed(() => store.state.panes[props.index]!);
+const paneView = ref<InstanceType<typeof PaneView> | null>(null);
+const approvalResolving = ref(false);
+const paneRequests = computed(() => store.state.pendingRequests.filter((request) => request.paneId === pane.value.id || request.paneId === null && props.index === 0));
+
+const resolveRequest = async (request: PendingServerRequest, result?: unknown, error?: { code: number; message: string }): Promise<void> => {
+  if (approvalResolving.value) return;
+  approvalResolving.value = true;
+  try {
+    await store.resolveRequest(request, result, error);
+  } catch {
+    // The inline approval stays visible and the pane shows a recoverable error.
+  } finally {
+    approvalResolving.value = false;
+  }
+};
+const activate = (): void => {
+  if (store.state.focusedPaneId !== pane.value.id) {
+    store.state.focusedPaneId = pane.value.id;
+    store.scheduleSave();
+  }
+  store.clearUnread(pane.value);
+};
+const focusComposer = (): void => {
+  activate();
+  void paneView.value?.focusComposer();
+};
+defineExpose({ focusComposer });
+</script>
+
+<template>
+  <PaneView
+    ref="paneView"
+    :pane="pane"
+    :default-cwd="store.state.defaultCwd"
+    :models="store.state.models"
+    :focused="store.state.focusedPaneId === pane.id"
+    :pending-requests="paneRequests"
+    :approval-resolving="approvalResolving"
+    :rate-limit-labels="store.state.rateLimitLabels"
+    :approval-reviewer="store.state.effectiveConfig?.approvalReviewer"
+    :command-shell-path="store.state.appearance.commandShellPath"
+    :mcp-gateway-adaptation="store.state.appearance.mcpGatewayAdaptation"
+    @send="store.send(pane)"
+    @interrupt="store.interrupt(pane)"
+    @new-thread="store.newThread(pane)"
+    @open-sessions="emit('openSessions', pane.id)"
+    @choose-image="store.chooseImage(pane)"
+    @choose-files="store.chooseFiles(pane)"
+    @open-skills="store.refreshSkills(pane)"
+    @paste-image="store.addClipboardImage(pane)"
+    @paste-reference="store.addPastedReference(pane, $event)"
+    @slash-command="store.executeSlashCommand(pane, $event)"
+    @remove-attachment="store.removeAttachment(pane, $event)"
+    @remove-reference="store.removeReference(pane, $event)"
+    @resolve="resolveRequest"
+    @item-action="store.handleItemAction(pane, $event)"
+    @scroll-state="(top, follow) => { pane.scrollTop = top; pane.followTail = follow; store.scheduleSave(); }"
+    @click="activate"
+    @activate="activate"
+  />
+</template>

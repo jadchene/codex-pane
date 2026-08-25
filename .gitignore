@@ -1,0 +1,17 @@
+node_modules/
+data/
+dist/
+dist-electron/
+release/
+coverage/
+test-results/
+playwright-report/
+*.log
+.env
+.env.*
+!.env.example
+.vite/
+.idea/
+.vscode/
+Thumbs.db
+Desktop.ini
