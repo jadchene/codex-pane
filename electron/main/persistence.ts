@@ -48,8 +48,9 @@ export const workspaceStateSchema = z.object({
     fontSize: z.number().int().min(12).max(22).default(14),
     accentColor: z.string().regex(/^#[0-9a-f]{6}$/i).default("#10a37f"),
     commandShellPath: z.string().max(32_768).default("C:\\Program Files\\PowerShell\\7\\pwsh.exe"),
+    unwrapPowerShellCommands: z.boolean().default(true),
     mcpGatewayAdaptation: z.boolean().default(false)
-  }).default({ theme: "dark", fontFamily: '"Segoe UI", "Microsoft YaHei UI", sans-serif', fontSize: 14, accentColor: "#10a37f", commandShellPath: "C:\\Program Files\\PowerShell\\7\\pwsh.exe", mcpGatewayAdaptation: false }),
+  }).default({ theme: "dark", fontFamily: '"Segoe UI", "Microsoft YaHei UI", sans-serif', fontSize: 14, accentColor: "#10a37f", commandShellPath: "C:\\Program Files\\PowerShell\\7\\pwsh.exe", unwrapPowerShellCommands: true, mcpGatewayAdaptation: false }),
   focusedPaneId: z.string().nullable(),
   panes: z.array(paneSchema).min(1).max(6),
   window: z.object({

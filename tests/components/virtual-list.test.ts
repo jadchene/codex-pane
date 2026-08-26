@@ -2,10 +2,14 @@
 
 import { h } from "vue";
 import { mount } from "@vue/test-utils";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import VirtualList from "../../src/components/VirtualList.vue";
 
 describe("VirtualList", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
   it("keeps a ten-thousand-item conversation bounded to the visible window", async () => {
     const items = Array.from({ length: 10_000 }, (_, index) => ({ id: `item-${index}`, text: `message ${index}` }));
     const wrapper = mount(VirtualList, {
@@ -54,5 +58,32 @@ describe("VirtualList", () => {
 
     expect(wrapper.find(".virtual-row").text()).toBe(anchorText);
     expect(scroller.scrollTop).toBe(1_280);
+  });
+
+  it("does not force the scroll position while measured rows change height", async () => {
+    const callbacks: ResizeObserverCallback[] = [];
+    class TestResizeObserver {
+      constructor(callback: ResizeObserverCallback) { callbacks.push(callback); }
+      observe(): void {}
+      unobserve(): void {}
+      disconnect(): void {}
+    }
+    vi.stubGlobal("ResizeObserver", TestResizeObserver);
+    const items = Array.from({ length: 100 }, (_, index) => ({ id: `item-${index}`, text: `message ${index}` }));
+    const wrapper = mount(VirtualList, {
+      props: { items, itemKey: (item: unknown) => (item as { id: string }).id, estimateSize: () => 64, minItemSize: 56, buffer: 160 },
+      slots: { default: ({ item }: { item: unknown }) => h("article", { class: "virtual-row" }, (item as { text: string }).text) }
+    });
+    const scroller = wrapper.element as HTMLElement;
+    Object.defineProperty(scroller, "clientHeight", { configurable: true, value: 320 });
+    scroller.scrollTop = 640;
+    scroller.dispatchEvent(new Event("scroll"));
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 20));
+    const rowsAboveViewport = wrapper.findAll("[data-virtual-key]").filter((row) => Number((row.attributes("data-virtual-key") ?? "").slice(5)) < 10).map((row) => row.element);
+    callbacks[0]!(rowsAboveViewport.map((target) => ({ target, borderBoxSize: [{ blockSize: 100 }] })) as unknown as ResizeObserverEntry[], {} as ResizeObserver);
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 20));
+
+    expect(scroller.scrollTop).toBe(640);
+    expect(wrapper.text()).toContain("message 10");
   });
 });

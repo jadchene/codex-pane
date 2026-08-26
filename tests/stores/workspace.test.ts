@@ -20,7 +20,7 @@ const workspaceWithThread = (threadId: string): WorkspaceState => ({
   layout: "quad",
   splitSizes: {},
   defaultCwd: "",
-  appearance: { theme: "dark", fontFamily: '"Segoe UI"', fontSize: 14, accentColor: "#10a37f", commandShellPath: "", mcpGatewayAdaptation: false },
+  appearance: { theme: "dark", fontFamily: '"Segoe UI"', fontSize: 14, accentColor: "#10a37f", commandShellPath: "", unwrapPowerShellCommands: true, mcpGatewayAdaptation: false },
   focusedPaneId: null,
   panes: Array.from({ length: 6 }, (_, index) => ({
     id: `pane-${index + 1}`,
@@ -855,7 +855,7 @@ describe("workspace state machine", () => {
     vi.useFakeTimers();
     try {
       const workspace = workspaceWithThread("thread-a");
-      workspace.appearance = { theme: "light", fontFamily: "Consolas", fontSize: 16, accentColor: "#336699", commandShellPath: "", mcpGatewayAdaptation: true };
+      workspace.appearance = { theme: "light", fontFamily: "Consolas", fontSize: 16, accentColor: "#336699", commandShellPath: "", unwrapPowerShellCommands: true, mcpGatewayAdaptation: true };
       const api = installApi(Promise.resolve({ connection: connection("ready"), workspace }));
       api.request.mockImplementation(async (requestValue: { method: string }) => {
         if (requestValue.method === "model/list") return { data: [] };
@@ -879,7 +879,7 @@ describe("workspace state machine", () => {
       store.updateAppearance({ fontSize: 18, accentColor: "#112233" });
       store.setWorkspaceMode("sessionSidebar");
       await vi.advanceTimersByTimeAsync(500);
-      expect(window.codexPane.saveWorkspace).toHaveBeenCalledWith(expect.objectContaining({ workspaceMode: "sessionSidebar", appearance: { theme: "light", fontFamily: "Consolas", fontSize: 18, accentColor: "#112233", commandShellPath: "", mcpGatewayAdaptation: true } }));
+      expect(window.codexPane.saveWorkspace).toHaveBeenCalledWith(expect.objectContaining({ workspaceMode: "sessionSidebar", appearance: { theme: "light", fontFamily: "Consolas", fontSize: 18, accentColor: "#112233", commandShellPath: "", unwrapPowerShellCommands: true, mcpGatewayAdaptation: true } }));
     } finally {
       vi.useRealTimers();
     }

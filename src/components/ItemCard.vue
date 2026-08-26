@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import { NAlert, NButton, NCard, NCode, NCollapse, NCollapseItem, NDescriptions, NDescriptionsItem, NIcon, NImage, NList, NListItem, NSpace, NTag, NText, NTooltip } from "naive-ui";
+import { NAlert, NButton, NCard, NCode, NCollapse, NCollapseItem, NDescriptions, NDescriptionsItem, NIcon, NImage, NList, NListItem, NSpace, NTag, NText, NTooltip, useMessage } from "naive-ui";
 import { CheckmarkCircleOutline, CopyOutline, EllipsisHorizontalCircleOutline, TerminalOutline } from "@vicons/ionicons5";
 import type { ItemAction, UiItem } from "../types";
 import MarkdownContent from "./MarkdownContent.vue";
@@ -14,6 +14,7 @@ type ParsedDiff = { added: number; deleted: number; hunks: DiffHunk[] };
 
 const props = withDefaults(defineProps<{ item: UiItem; unwrapPowerShell?: boolean; commandShellPath?: string; mcpGatewayAdaptation?: boolean }>(), { unwrapPowerShell: false, commandShellPath: "", mcpGatewayAdaptation: false });
 const emit = defineEmits<{ action: [action: ItemAction] }>();
+const message = useMessage();
 const copied = ref(false);
 const imagePreviewUrl = ref<string | null>(null);
 const imagePreviewError = ref<string | null>(null);
@@ -194,6 +195,7 @@ const stripEscapedOuterQuotes = (value: string): string => {
   return result;
 };
 const unwrapPowerShellCommand = (value: string): string => {
+  if (!props.unwrapPowerShell) return value;
   const invocation = value.trim().replace(/^&\s+/, "");
   const quote = invocation[0];
   let executable = "";
@@ -435,15 +437,21 @@ watch(imagePath, async (path) => {
 }, { immediate: true });
 
 const copyText = async (value: string): Promise<void> => {
-  await navigator.clipboard.writeText(value);
-  copied.value = true;
-  setTimeout(() => { copied.value = false; }, 1200);
+  try {
+    await window.codexPane.copyText(value);
+    copied.value = true;
+    message.success("复制成功");
+    setTimeout(() => { copied.value = false; }, 1200);
+  } catch {
+    copied.value = false;
+    message.error("复制失败");
+  }
 };
 </script>
 
 <template>
   <article v-if="item.type === 'agentMessage'" class="message message-agent item-card">
-    <MarkdownContent :source="displayText" :streaming="item.status === 'running'" />
+    <MarkdownContent :source="displayText" :streaming="item.status === 'running'" ctrl-click-links />
     <NTooltip>
       <template #trigger><NButton quaternary circle size="tiny" class="copy-message-button" :aria-label="copied ? '已复制回复' : '复制回复'" @click="copyText(displayText)"><template #icon><NIcon :component="copied ? CheckmarkCircleOutline : CopyOutline" /></template></NButton></template>
       {{ copied ? "已复制" : "复制回复" }}
@@ -597,12 +605,16 @@ const copyText = async (value: string): Promise<void> => {
   background: var(--app-raised, rgb(255 255 255 / 4%));
   border-color: var(--app-border, rgb(255 255 255 / 12%));
 }
+.message-agent :deep(.markdown-content a) { cursor: pointer !important; }
 
 .auto-review-card { border-left: 3px solid var(--app-accent, #10a37f); }
 .auto-review-denied, .auto-review-timedOut, .auto-review-aborted { border-left-color: #ef4444; }
 .auto-review-action { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; color: inherit; font: inherit; }
 
 .diff-entry {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
   margin-block: 6px;
   padding: 9px 10px;
   border: 1px solid var(--app-border, #64748b);
@@ -612,6 +624,10 @@ const copyText = async (value: string): Promise<void> => {
 }
 
 .diff-entry :deep(.n-collapse-item__content-inner) { padding-top: 0; }
+.diff-entry :deep(.n-list-item__main),
+.diff-entry :deep(.n-collapse-item),
+.diff-entry :deep(.n-collapse-item__content-wrapper),
+.diff-entry :deep(.n-collapse-item__content-inner) { min-width: 0; max-width: 100%; }
 
 .diff-add { border-left-color: #22c55e; background: rgb(34 197 94 / 8%); }
 .diff-update { border-left-color: #3b82f6; background: rgb(59 130 246 / 8%); }
@@ -636,14 +652,18 @@ const copyText = async (value: string): Promise<void> => {
 .diff-count-delete { color: #ef4444; }
 
 .diff-viewer {
-  overflow: auto;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-gutter: stable;
   border: 1px solid var(--app-border, rgb(127 127 127 / 22%));
   border-radius: 7px;
   background: var(--app-raised, rgb(2 6 23 / 24%));
 }
 
 .diff-hunk-separator { padding: 1px 0 1px 1.5ch; color: var(--app-muted, #8b949e); background: var(--app-raised, transparent); font-size: .9em; line-height: 1.2; }
-.diff-table { min-width: max-content; width: 100%; font: .91em/1.55 var(--app-font-family); }
+.diff-table { min-width: 100%; width: max-content; font: .91em/1.55 var(--app-font-family); }
 .diff-code-line { display: grid; grid-template-columns: 5ch 2.5ch minmax(max-content, 1fr); min-height: 1.55em; }
 .diff-line-number { padding-inline: 6px; color: var(--app-diff-gutter-text, var(--app-muted, #8b949e)); text-align: right; user-select: none; opacity: .78; }
 .diff-line-marker { text-align: center; user-select: none; }
@@ -666,4 +686,6 @@ const copyText = async (value: string): Promise<void> => {
 .tool-card :deep(.n-descriptions-table-content__label) { width: 7.5em; }
 .tool-card :deep(.n-descriptions-table-content__content),
 .tool-card .long-output { min-width: 0; width: 100%; }
+.tool-card,
+.tool-card :deep(.n-card__content) { min-width: 0; width: 100%; }
 </style>

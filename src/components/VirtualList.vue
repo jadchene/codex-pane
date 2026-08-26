@@ -72,10 +72,14 @@ let rowObserver: ResizeObserver | null = null;
 let widthObserver: ResizeObserver | null = null;
 let observedWidth = 0;
 let currentAnchorKey: string | null = null;
+let currentViewportAnchorKey: string | null = null;
+let currentViewportAnchorOffset = 0;
+let tailDetached = false;
 const observedRows = new Map<string, Element>();
 
 const visibleItems = computed(() => props.items.slice(startIndex.value, endIndex.value));
 const estimatedSize = (item: TItem): number => Math.max(props.minItemSize, props.estimateSize?.(item) ?? props.minItemSize);
+const followsTail = (): boolean => props.followTail && !tailDetached;
 const updateRange = (): void => {
   rangeFrame = null;
   const element = scroller.value;
@@ -86,14 +90,17 @@ const updateRange = (): void => {
     bottomSpacer.value = 0;
     return;
   }
-  const viewportTop = props.followTail ? Math.max(0, sizes.total() - element.clientHeight) : element.scrollTop;
+  const viewportTop = followsTail() ? Math.max(0, sizes.total() - element.clientHeight) : element.scrollTop;
   const start = sizes.indexAt(Math.max(0, viewportTop - props.buffer));
-  const end = props.followTail
+  const end = followsTail()
     ? props.items.length
     : Math.min(props.items.length, sizes.indexAt(element.scrollTop + element.clientHeight + props.buffer) + 1);
   startIndex.value = start;
   endIndex.value = Math.max(start + 1, end);
   currentAnchorKey = props.itemKey(props.items[start]!);
+  const viewportAnchorIndex = sizes.indexAt(element.scrollTop);
+  currentViewportAnchorKey = props.itemKey(props.items[viewportAnchorIndex]!);
+  currentViewportAnchorOffset = element.scrollTop - sizes.prefix(viewportAnchorIndex);
   topSpacer.value = sizes.prefix(start);
   bottomSpacer.value = Math.max(0, sizes.total() - sizes.prefix(endIndex.value));
 };
@@ -102,18 +109,18 @@ const scheduleRangeUpdate = (): void => {
 };
 const rebuild = async (): Promise<void> => {
   const element = scroller.value;
-  const anchorKey = props.followTail ? null : currentAnchorKey;
-  const anchorOffset = element ? element.scrollTop - sizes.prefix(startIndex.value) : 0;
+  const anchorKey = followsTail() ? null : currentViewportAnchorKey ?? currentAnchorKey;
+  const anchorOffset = currentViewportAnchorKey ? currentViewportAnchorOffset : element ? element.scrollTop - sizes.prefix(startIndex.value) : 0;
   keyIndexes = new Map(props.items.map((item, index) => [props.itemKey(item), index]));
   for (const key of measuredSizes.keys()) {
     if (!keyIndexes.has(key)) measuredSizes.delete(key);
   }
   sizes = new FenwickTree(props.items.map((item) => measuredSizes.get(props.itemKey(item)) ?? estimatedSize(item)));
-  if (element && props.followTail) {
-    element.scrollTop = sizes.total();
+  if (element && followsTail()) {
+    setScrollTop(element, sizes.total());
   } else if (element && anchorKey) {
     const nextAnchorIndex = keyIndexes.get(anchorKey);
-    if (nextAnchorIndex !== undefined) element.scrollTop = Math.max(0, sizes.prefix(nextAnchorIndex) + anchorOffset);
+    if (nextAnchorIndex !== undefined) setScrollTop(element, Math.max(0, sizes.prefix(nextAnchorIndex) + anchorOffset));
   }
   updateRange();
   await nextTick();
@@ -133,18 +140,28 @@ const observeRow = (element: Element | null, item: TItem): void => {
   observedRows.set(key, element);
   rowObserver.observe(element);
 };
+const setScrollTop = (element: HTMLElement, position: number): void => {
+  element.scrollTop = position;
+};
 const handleScroll = (event: Event): void => {
+  const element = event.currentTarget as HTMLElement;
+  tailDetached = element.scrollHeight - element.scrollTop - element.clientHeight >= 2;
   scheduleRangeUpdate();
   emit("scroll", event);
 };
+const handleWheel = (event: WheelEvent): void => {
+  if (event.deltaY < 0) tailDetached = true;
+};
 const scrollToBottom = (): void => {
   if (!scroller.value) return;
-  scroller.value.scrollTop = sizes.total();
+  tailDetached = false;
+  setScrollTop(scroller.value, sizes.total());
   scheduleRangeUpdate();
 };
 const scrollToPosition = (position: number): void => {
   if (!scroller.value) return;
-  scroller.value.scrollTop = Math.max(0, position);
+  tailDetached = scroller.value.scrollHeight - position - scroller.value.clientHeight >= 2;
+  setScrollTop(scroller.value, Math.max(0, position));
   scheduleRangeUpdate();
 };
 
@@ -156,6 +173,7 @@ onMounted(() => {
   }
   rowObserver = new ResizeObserver((entries) => {
     const element = scroller.value;
+    let changed = false;
     for (const entry of entries) {
       const key = (entry.target as HTMLElement).dataset.virtualKey;
       if (!key) continue;
@@ -166,9 +184,9 @@ onMounted(() => {
       if (nextSize === previousSize) continue;
       measuredSizes.set(key, nextSize);
       sizes.add(index, nextSize - previousSize);
-      if (element && props.followTail) element.scrollTop = sizes.total();
-      else if (element && index < sizes.indexAt(element.scrollTop)) element.scrollTop += nextSize - previousSize;
+      changed = true;
     }
+    if (element && changed && followsTail()) setScrollTop(element, sizes.total());
     scheduleRangeUpdate();
   });
   widthObserver = new ResizeObserver((entries) => {
@@ -191,7 +209,7 @@ defineExpose({ scrollToBottom, scrollToPosition });
 </script>
 
 <template>
-  <div ref="scroller" :data-total-items="items.length" @scroll.passive="handleScroll">
+  <div ref="scroller" :data-total-items="items.length" @scroll.passive="handleScroll" @wheel.passive="handleWheel">
     <div v-if="$slots.before" class="virtual-list-overlay"><slot name="before" /></div>
     <slot v-if="!items.length" name="empty" />
     <div class="virtual-list-spacer" :style="{ height: `${topSpacer}px` }" />

@@ -10,6 +10,7 @@ export type AppearanceSettings = {
   fontSize: number;
   accentColor: string;
   commandShellPath: string;
+  unwrapPowerShellCommands: boolean;
   mcpGatewayAdaptation: boolean;
 };
 

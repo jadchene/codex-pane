@@ -20,6 +20,7 @@ const props = withDefaults(defineProps<{
   approvalPolicy?: string | null;
   sandboxMode?: string | null;
   commandShellPath?: string;
+  unwrapPowerShellCommands?: boolean;
   mcpGatewayAdaptation?: boolean;
   searchFiles?: (query: string) => Promise<Array<{ name: string; path: string; relativePath: string }>>;
 }>(), { showTitle: true });
@@ -101,17 +102,6 @@ const effectiveCwd = computed(() => props.pane.cwd || props.defaultCwd || "未�
 const contextLabel = computed(() => {
   const remaining = props.pane.contextRemainingPercent;
   return `上下文 ${typeof remaining === "number" ? 100 - Math.min(100, Math.max(0, remaining)) : 0}%`;
-});
-const autoReviewLabel = computed(() => {
-  const review = props.pane.approvalReviews?.at(-1);
-  if (review?.status === "inProgress") return "自动审查中…";
-  if (review?.status === "approved") return "自动审查：已允许";
-  if (review?.status === "denied") return "自动审查：未通过";
-  if (review?.status === "timedOut") return "自动审查：已超时";
-  if (review?.status === "aborted") return "自动审查：已中止";
-  if (props.pane.strictReviewRequired) return "自动审查：后续命令均需复核";
-  if (props.approvalReviewer === "auto_review" || props.approvalReviewer === "guardian_subagent") return "自动审查已启用";
-  return "";
 });
 const permissionModeLabel = computed(() => {
   const reviewer = props.pane.approvalsReviewer ?? props.approvalReviewer ?? "";
@@ -420,7 +410,7 @@ defineExpose({ focusComposer });
 
     <VirtualList ref="output" class="pane-output" :items="pane.items" :item-key="itemKey" :estimate-size="estimateItemSize" :min-item-size="56" :buffer="160" :follow-tail="pane.followTail" @scroll="handleOutputScroll">
       <template #before><div v-if="pane.historyLoading" class="history-loading">正在加载更早内容…</div></template>
-      <template #default="{ item }"><div class="conversation-item"><ItemCard :item="item" :command-shell-path="commandShellPath" :mcp-gateway-adaptation="mcpGatewayAdaptation" @action="emit('itemAction', $event)" /></div></template>
+      <template #default="{ item }"><div class="conversation-item"><ItemCard :item="item" :unwrap-power-shell="unwrapPowerShellCommands" :command-shell-path="commandShellPath" :mcp-gateway-adaptation="mcpGatewayAdaptation" @action="emit('itemAction', $event)" /></div></template>
       <template #empty><div class="empty-conversation"><NText depth="3">输入消息开始会话</NText></div></template>
     </VirtualList>
 
@@ -481,7 +471,6 @@ defineExpose({ focusComposer });
       <footer class="status-line">
         <span v-if="pane.status === 'running' || pane.status === 'starting'" class="working-indicator" role="status">Working<span class="working-dots">...</span></span>
         <span v-if="permissionModeLabel" class="auto-review-indicator" role="status">{{ permissionModeLabel }}</span>
-        <span v-if="autoReviewLabel && /中|允许|未通过|超时|中止|复核/.test(autoReviewLabel)" class="auto-review-indicator" role="status">{{ autoReviewLabel }}</span>
         <span v-if="pane.collaborationMode === 'plan'">计划模式</span>
         <span v-if="goalStatusLabel">{{ goalStatusLabel }}</span>
         <span v-if="pane.activeFlags?.includes('waitingOnApproval')">等待操作确认</span>

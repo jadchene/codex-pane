@@ -168,6 +168,8 @@ test("verifies the packaged Windows executable, protected persistence, reconnect
     expect(csp).not.toMatch(/localhost|127\.0\.0\.1|ws:|unsafe-eval/i);
 
     const composer = window.getByPlaceholder(/发送消息/).first();
+    await window.evaluate(() => (globalThis as typeof globalThis & { codexPane: { copyText: (value: string) => Promise<void> } }).codexPane.copyText("Codex Pane 复制测试"));
+    expect(await application.evaluate(({ clipboard }) => clipboard.readText())).toBe("Codex Pane 复制测试");
     await application.evaluate(({ clipboard }) => clipboard.writeText("https://example.com/pasted-image.png"));
     await composer.focus();
     await window.keyboard.press("Control+V");

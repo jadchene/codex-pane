@@ -21,6 +21,7 @@ const fontSize = computed({
 });
 const accentColor = computed({ get: () => store.state.appearance.accentColor, set: (value: string) => updateAppearance({ accentColor: value }) });
 const commandShellPath = computed({ get: () => props.commandShellPath, set: (value: string) => emit("update:commandShellPath", value) });
+const unwrapPowerShellCommands = computed({ get: () => store.state.appearance.unwrapPowerShellCommands, set: (value: boolean) => updateAppearance({ unwrapPowerShellCommands: value }) });
 const mcpGatewayAdaptation = computed({ get: () => store.state.appearance.mcpGatewayAdaptation, set: (value: boolean) => updateAppearance({ mcpGatewayAdaptation: value }) });
 const systemFonts = ref<string[]>([]);
 const fontListState = ref<"idle" | "loading" | "ready" | "unavailable" | "denied">("idle");
@@ -107,8 +108,11 @@ watch(() => props.show, (show) => { if (show) void loadSystemFonts(); }, { immed
               </NSpace>
             </NCard>
           </NFormItem>
-          <NFormItem label="PowerShell 7 路径">
+          <NFormItem label="pwsh 路径">
             <NInput v-model:value="commandShellPath" clearable placeholder="C:\Program Files\PowerShell\7\pwsh.exe" />
+          </NFormItem>
+          <NFormItem label="简化 pwsh 命令">
+            <NSwitch v-model:value="unwrapPowerShellCommands" />
           </NFormItem>
           <NFormItem label="MCP Gateway 适配">
             <NSwitch v-model:value="mcpGatewayAdaptation" />

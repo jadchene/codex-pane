@@ -30,6 +30,7 @@ describe("workspace persistence validation", () => {
       fontSize: 14,
       accentColor: "#10a37f",
       commandShellPath: "C:\\Program Files\\PowerShell\\7\\pwsh.exe",
+      unwrapPowerShellCommands: true,
       mcpGatewayAdaptation: false
     });
   });

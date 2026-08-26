@@ -440,14 +440,23 @@ const registerIpc = (): void => {
     assertTrustedSender(event);
     return mainWindow?.isMaximized() ?? false;
   });
-  ipcMain.handle("external:open", async (event, rawUrl: unknown) => {
+  ipcMain.handle("clipboard:write-text", (event, rawValue: unknown) => {
+    assertTrustedSender(event);
+    if (typeof rawValue !== "string" || rawValue.length > 2_000_000) throw new Error("复制内容无效。");
+    clipboard.writeText(rawValue);
+  });
+  ipcMain.handle("external:open", async (event, rawUrl: unknown, rawDirect: unknown) => {
     assertTrustedSender(event);
     if (typeof rawUrl !== "string") {
       throw new Error("链接无效。" );
     }
     const url = new URL(rawUrl);
-    if (url.protocol !== "https:" || url.username || url.password) {
-      throw new Error("只允许打开 HTTPS 链接。" );
+    if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) {
+      throw new Error("只允许打开 HTTP 或 HTTPS 链接。" );
+    }
+    if (rawDirect === true) {
+      await shell.openExternal(url.toString());
+      return;
     }
     const confirmation = await dialog.showMessageBox(mainWindow!, {
       type: "question",

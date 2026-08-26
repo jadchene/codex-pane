@@ -14,11 +14,12 @@ const api = {
   resolveFilePaths: (files: File[]): string[] => files.map((file) => webUtils.getPathForFile(file)).filter(Boolean),
   importImagePath: (path: string): Promise<MediaAttachment> => ipcRenderer.invoke("media:path", path),
   addRemoteImage: (url: string): Promise<MediaAttachment> => ipcRenderer.invoke("media:remote", url),
+  copyText: (value: string): Promise<void> => ipcRenderer.invoke("clipboard:write-text", value),
   saveWorkspace: (state: WorkspaceState): Promise<void> => ipcRenderer.invoke("workspace:save", state),
   setFullScreen: (fullScreen: boolean): Promise<void> => ipcRenderer.invoke("window:fullscreen", fullScreen),
   windowControl: (action: "minimize" | "maximize" | "close"): Promise<void> => ipcRenderer.invoke("window:control", action),
   isMaximized: (): Promise<boolean> => ipcRenderer.invoke("window:is-maximized"),
-  openExternal: (url: string): Promise<void> => ipcRenderer.invoke("external:open", url),
+  openExternal: (url: string, direct = false): Promise<void> => ipcRenderer.invoke("external:open", url, direct),
   listSystemFonts: (): Promise<string[]> => ipcRenderer.invoke("system:fonts"),
   readDiagnostics: (): Promise<string[]> => ipcRenderer.invoke("diagnostics:read"),
   onConnectionState: (listener: (state: ConnectionState) => void): (() => void) => {

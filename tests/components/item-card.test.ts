@@ -1,17 +1,20 @@
 // @vitest-environment jsdom
 
 import { config, mount } from "@vue/test-utils";
+import { messageApiInjectionKey } from "naive-ui/es/message/src/context";
 import { nextTick } from "vue";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import ItemCard from "../../src/components/ItemCard.vue";
 import type { UiItem } from "../../src/types";
 
 const item = (type: string, data: Record<string, unknown>, streamText = "", status: UiItem["status"] = "completed"): UiItem => ({ id: "item-1", turnId: "turn-1", type, data, streamText, status });
+const messageApi = { success: vi.fn(), error: vi.fn() };
 
 config.global.stubs = {
   MarkdownContent: { props: ["source"], template: "<div>{{ source }}</div>" },
   NTooltip: { template: "<span><slot name='trigger' /><slot /></span>" }
 };
+config.global.provide = { [messageApiInjectionKey as symbol]: messageApi };
 
 const expandFirst = async (wrapper: ReturnType<typeof mount>): Promise<void> => {
   await wrapper.get(".n-collapse-item__header-main").trigger("click");
@@ -19,7 +22,8 @@ const expandFirst = async (wrapper: ReturnType<typeof mount>): Promise<void> => 
 };
 
 beforeEach(() => {
-  Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: vi.fn().mockResolvedValue(undefined) } });
+  vi.clearAllMocks();
+  window.codexPane = { copyText: vi.fn().mockResolvedValue(undefined) } as unknown as Window["codexPane"];
 });
 
 describe("ItemCard compact structured views", () => {
@@ -30,7 +34,17 @@ describe("ItemCard compact structured views", () => {
     const button = wrapper.get('button[aria-label="复制回复"]');
     expect(button.text()).toBe("");
     await button.trigger("click");
-    expect(navigator.clipboard.writeText).toHaveBeenCalledWith("完成了");
+    expect(window.codexPane.copyText).toHaveBeenCalledWith("完成了");
+    expect(messageApi.success).toHaveBeenCalledWith("复制成功");
+    expect(messageApi.error).not.toHaveBeenCalled();
+  });
+
+  it("shows an error toast when copying an agent reply fails", async () => {
+    vi.mocked(window.codexPane.copyText).mockRejectedValueOnce(new Error("denied"));
+    const wrapper = mount(ItemCard, { props: { item: item("agentMessage", { text: "无法复制" }) } });
+    await wrapper.get('button[aria-label="复制回复"]').trigger("click");
+    await vi.waitFor(() => expect(messageApi.error).toHaveBeenCalledWith("复制失败"));
+    expect(messageApi.success).not.toHaveBeenCalled();
   });
 
   it("does not render an empty reasoning item", () => {
@@ -91,24 +105,26 @@ describe("ItemCard compact structured views", () => {
     expect(command.text()).toContain("Ran command");
     expect(command.text()).toContain("Get-ChildItem");
     expect(command.text()).not.toContain("must-not-render");
-    const running = mount(ItemCard, { props: { item: item("commandExecution", { command: "pwsh.exe -NoProfile -Command \"Get-ChildItem\"", status: "inProgress" }, "", "running") } });
+    const running = mount(ItemCard, { props: { item: item("commandExecution", { command: "pwsh.exe -NoProfile -Command \"Get-ChildItem\"", status: "inProgress" }, "", "running"), unwrapPowerShell: true } });
     expect(running.text()).toContain("Running command");
     expect(running.text()).toContain("Get-ChildItem");
     expect(running.text()).not.toContain("pwsh.exe");
-    const configured = mount(ItemCard, { props: { item: item("commandExecution", { command: '"D:\\Tools\\pwsh.exe" -Command "Get-Location"', status: "completed" }), commandShellPath: "D:\\Tools\\pwsh.exe" } });
+    const configured = mount(ItemCard, { props: { item: item("commandExecution", { command: '"D:\\Tools\\pwsh.exe" -Command "Get-Location"', status: "completed" }), unwrapPowerShell: true, commandShellPath: "D:\\Tools\\pwsh.exe" } });
     expect(configured.text()).toContain("Get-Location");
     expect(configured.text()).not.toContain("D:\\Tools\\pwsh.exe");
-    const singleQuotedExecutable = mount(ItemCard, { props: { item: item("commandExecution", { command: "'C:\\Program Files\\PowerShell\\7\\pwsh.exe' '-Command' \"Get-Date\"" }) } });
+    const singleQuotedExecutable = mount(ItemCard, { props: { item: item("commandExecution", { command: "'C:\\Program Files\\PowerShell\\7\\pwsh.exe' '-Command' \"Get-Date\"" }), unwrapPowerShell: true } });
     expect(singleQuotedExecutable.text()).toContain("Get-Date");
     expect(singleQuotedExecutable.text()).not.toContain("PowerShell\\7");
-    const legacyPowerShell = mount(ItemCard, { props: { item: item("commandExecution", { command: '"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "& \'script.ps1\'"' }) } });
+    const legacyPowerShell = mount(ItemCard, { props: { item: item("commandExecution", { command: '"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "& \'script.ps1\'"' }), unwrapPowerShell: true } });
     expect(legacyPowerShell.text()).toContain("& 'script.ps1'");
     expect(legacyPowerShell.text()).not.toContain("powershell.exe");
-    const escapedInnerQuotes = mount(ItemCard, { props: { item: item("commandExecution", { command: `pwsh.exe -Command '\\"Get-Location\\"'` }) } });
+    const escapedInnerQuotes = mount(ItemCard, { props: { item: item("commandExecution", { command: `pwsh.exe -Command '\\"Get-Location\\"'` }), unwrapPowerShell: true } });
     expect(escapedInnerQuotes.text()).toContain("Get-Location");
     expect(escapedInnerQuotes.text()).not.toContain('\\"Get-Location\\"');
     const direct = mount(ItemCard, { props: { item: item("commandExecution", { command: "Get-ChildItem -Force" }) } });
     expect(direct.text()).toContain("Get-ChildItem -Force");
+    const wrapped = mount(ItemCard, { props: { item: item("commandExecution", { command: "pwsh.exe -Command \"Get-Date\"" }), unwrapPowerShell: false } });
+    expect(wrapped.text()).toContain("pwsh.exe -Command");
     expect(command.get(".inline-detail-fields").text()).toContain("目录：E:\\Work");
     expect(command.get(".inline-detail-fields").text()).toContain("退出码：0");
   });

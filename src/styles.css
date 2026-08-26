@@ -51,7 +51,7 @@ body :is(.n-dropdown-menu, .n-base-select-menu) { border: 1px solid var(--app-co
 .working-dots { display: inline-block; width: 14px; animation: working-pulse 1s steps(3, end) infinite; clip-path: inset(0 100% 0 0); vertical-align: bottom; }
 @keyframes working-pulse { 0% { clip-path: inset(0 100% 0 0); opacity: .35; } 100% { clip-path: inset(0 0 0 0); opacity: 1; } }
 
-.pane-output { min-height: 0; overflow: auto; padding: 12px clamp(10px, 2.2vw, 28px); }
+.pane-output { min-height: 0; overflow: auto; overflow-anchor: none; padding: 12px clamp(10px, 2.2vw, 28px); }
 .conversation-item { display: flex; flex-direction: column; min-width: 0; padding-bottom: 6px; }
 .history-loading { padding: 8px; color: var(--app-muted, #8c8c8c); text-align: center; }
 .empty-conversation { display: grid; min-height: 100%; place-items: center; }

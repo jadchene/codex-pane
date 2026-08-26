@@ -76,8 +76,10 @@ describe("PaneView compact workbench interactions", () => {
     const { value, wrapper } = mountPane();
     value.activePermissionProfile = ":workspace";
     value.approvalsReviewer = "auto_review";
+    value.approvalReviews = [{ reviewId: "review-1", turnId: "turn-1", targetItemId: "command-1", startedAtMs: 1, completedAtMs: 2, status: "approved", riskLevel: "low", userAuthorization: "low", rationale: "安全", decisionSource: "agent", action: {} }];
     await nextTick();
     expect(wrapper.get(".status-line").text()).toContain("权限：自动审批");
+    expect(wrapper.get(".status-line").text()).not.toContain("自动审查：已允许");
     expect(wrapper.get(".status-line").text()).not.toContain("计划模式");
     expect(wrapper.get(".status-line").text()).not.toContain("目标：");
 

@@ -2,7 +2,7 @@
 
 [English](README.md) | 简体中文
 
-Codex Pane 是 Windows 11 上的本机 Codex 工作台，直接使用电脑中已安装的 Codex CLI。
+Codex Pane 是基于 Codex app-server 的 Windows 11 本机 Codex 工作台。它直接调用电脑中已安装的 `codex` 命令，将会话、模型、权限、工具调用和任务状态集中到一个桌面界面中。你可以使用多窗格工作台并行处理多个任务，也可以切换到会话侧栏，专注当前对话并快速浏览历史会话。
 
 ## 效果图
 
@@ -10,13 +10,13 @@ Codex Pane 是 Windows 11 上的本机 Codex 工作台，直接使用电脑中�
 
 在一个窗口中同时使用多个独立会话。每个窗格拥有自己的会话、工作目录、模型、推理强度和权限状态。
 
-![多窗格模式](docs/screenshots/multi-pane.png)
+<img src="docs/screenshots/multi-pane.png" alt="多窗格模式" width="50%">
 
 ### 会话侧栏模式
 
 集中使用一个会话，通过侧栏浏览、搜索和切换其他会话。
 
-![会话侧栏模式](docs/screenshots/session-sidebar.png)
+<img src="docs/screenshots/session-sidebar.png" alt="会话侧栏模式" width="50%">
 
 两种模式可随时在设置中切换。
 

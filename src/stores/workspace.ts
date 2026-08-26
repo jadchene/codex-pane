@@ -17,6 +17,7 @@ const DEFAULT_APPEARANCE: AppearanceSettings = {
   fontSize: 14,
   accentColor: "#10a37f",
   commandShellPath: "C:\\Program Files\\PowerShell\\7\\pwsh.exe",
+  unwrapPowerShellCommands: true,
   mcpGatewayAdaptation: false
 };
 const HISTORY_TURN_PAGE_SIZE = 12;
@@ -1616,6 +1617,12 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   const releaseSidebarPane = async (pane: PaneState, unread: boolean, preserveContainer = false): Promise<void> => {
     const threadId = pane.threadId;
     if (unread && threadId) rememberSidebarUnread(threadId);
+    if (pane.threadId !== threadId || isPaneWorking(pane)) return;
+    resetPane(pane);
+    if (!preserveContainer && pane.id.startsWith(SIDEBAR_PANE_PREFIX)) {
+      state.value.panes = state.value.panes.filter((candidate) => candidate !== pane);
+    }
+    scheduleSave();
     if (threadId) {
       try {
         await window.codexPane.request({ method: "thread/unsubscribe", params: { threadId } });
@@ -1623,12 +1630,6 @@ export const useWorkspaceStore = defineStore("workspace", () => {
         // Local state is still released; subsequent unmatched events are ignored.
       }
     }
-    if (pane.threadId !== threadId || isPaneWorking(pane)) return;
-    resetPane(pane);
-    if (!preserveContainer && pane.id.startsWith(SIDEBAR_PANE_PREFIX)) {
-      state.value.panes = state.value.panes.filter((candidate) => candidate !== pane);
-    }
-    scheduleSave();
   };
 
   const createSidebarPane = (): PaneState => {
@@ -1663,7 +1664,9 @@ export const useWorkspaceStore = defineStore("workspace", () => {
       if (destination.id.startsWith(SIDEBAR_PANE_PREFIX)) state.value.panes = state.value.panes.filter((pane) => pane !== destination);
       throw new Error(message);
     }
-    if (!isPaneWorking(currentPane)) await releaseSidebarPane(currentPane, false);
+    if (!isPaneWorking(currentPane)) {
+      await releaseSidebarPane(currentPane, false);
+    }
     state.value.focusedPaneId = destination.id;
     scheduleSave();
     return destination;

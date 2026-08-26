@@ -52,6 +52,7 @@ defineExpose({ focusComposer });
     :approval-policy="store.state.effectiveConfig?.approvalPolicy"
     :sandbox-mode="store.state.effectiveConfig?.sandboxMode"
     :command-shell-path="store.state.appearance.commandShellPath"
+    :unwrap-power-shell-commands="store.state.appearance.unwrapPowerShellCommands"
     :mcp-gateway-adaptation="store.state.appearance.mcpGatewayAdaptation"
     :search-files="query => store.searchWorkspaceFiles(pane, query)"
     @send="store.send(pane)"

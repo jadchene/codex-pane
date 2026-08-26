@@ -209,7 +209,7 @@ test("starts the desktop workbench and connects to Codex", async () => {
     expect(Number.parseFloat(focusMetrics.selectionBorder)).toBeGreaterThanOrEqual(0.7);
     expect(focusMetrics.composerBackground).toBe(composerBackgroundBeforeFocus);
     await firstComposer.fill("/");
-    await expect(window.getByText("/new  新建会话", { exact: true })).toBeVisible();
+    await expect(window.getByText("/new", { exact: true })).toBeVisible();
     await firstComposer.fill("");
     await application.evaluate(({ clipboard }) => clipboard.writeText("https://example.com/codex-pane-test.png"));
     await firstComposer.focus();
@@ -219,6 +219,8 @@ test("starts the desktop workbench and connects to Codex", async () => {
     const userDataPath = await application.evaluate(({ app }) => app.getPath("userData"));
     await firstComposer.fill("");
     await firstComposer.fill("/resume");
+    await firstComposer.press("Enter");
+    await expect(firstComposer).toHaveValue(/^\/resume\s*$/);
     await firstComposer.press("Enter");
     await expect(window.getByText("恢复会话", { exact: true })).toBeVisible();
     await expect(window.getByPlaceholder("按标题或内容搜索历史会话")).toBeVisible();
@@ -243,7 +245,7 @@ test("starts the desktop workbench and connects to Codex", async () => {
     await expect(window.getByText("设置", { exact: true })).toBeVisible();
     await expect(window.getByText("默认模型", { exact: true })).toBeVisible();
     await expect(window.getByText("权限配置", { exact: true })).toBeVisible();
-    await expect(window.getByText("PowerShell 7 路径", { exact: true })).toBeVisible();
+    await expect(window.getByText("pwsh 路径", { exact: true })).toBeVisible();
     await expect(window.getByText(/新会话默认使用这里的目录/)).toHaveCount(0);
     await expect(window.getByText(/这些值由本机 Codex 决定/)).toHaveCount(0);
     const fontReadback = window.getByText(/已读取 \d+ 个字体系列/);
@@ -408,6 +410,7 @@ test("routes four concurrent Codex turns to their own panes", async () => {
       const pane = window.locator(`[data-pane-id="pane-${index + 1}"]`);
       const paneComposer = pane.getByPlaceholder(/发送消息/);
       await paneComposer.fill("/new");
+      await paneComposer.press("Enter");
       await paneComposer.press("Enter");
       await expect(pane.locator(".message-agent")).toHaveCount(0);
     }

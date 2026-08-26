@@ -19,6 +19,7 @@ const createWorkspace = async (userDataPath: string): Promise<void> => {
       fontSize: 14,
       accentColor: "#10a37f",
       commandShellPath: "C:\\Program Files\\PowerShell\\7\\pwsh.exe",
+      unwrapPowerShellCommands: true,
       mcpGatewayAdaptation: false
     },
     focusedPaneId: null,
@@ -102,6 +103,24 @@ test("keeps the longest-session shape smooth across six panes", async () => {
     const mountedItems = await window.locator(".conversation-item").count();
     expect(mountedItems).toBeGreaterThan(0);
     expect(mountedItems).toBeLessThan(300);
+
+    const upwardScroll = await window.locator(".pane-output").first().evaluate(async (element) => {
+      element.scrollTop = element.scrollHeight;
+      await new Promise<void>((resolveFrame) => requestAnimationFrame(() => resolveFrame()));
+      const start = element.scrollTop;
+      let previous = start;
+      let reversals = 0;
+      for (let frame = 0; frame < 40; frame += 1) {
+        element.dispatchEvent(new WheelEvent("wheel", { deltaY: -60 }));
+        element.scrollTop = Math.max(0, element.scrollTop - 60);
+        await new Promise<void>((resolveFrame) => requestAnimationFrame(() => resolveFrame()));
+        if (element.scrollTop > previous + 1) reversals += 1;
+        previous = element.scrollTop;
+      }
+      return { start, end: element.scrollTop, reversals };
+    });
+    expect(upwardScroll.reversals).toBe(0);
+    expect(upwardScroll.end).toBeLessThan(upwardScroll.start - 1_000);
 
     const idleFrames = await frameMetrics(window, false);
     process.stdout.write(`[performance:idle] ${JSON.stringify(idleFrames)}\n`);

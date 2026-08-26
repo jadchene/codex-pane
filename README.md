@@ -2,7 +2,7 @@
 
 English | [简体中文](README.zh-CN.md)
 
-Codex Pane is a Windows 11 desktop workbench for local Codex sessions. It uses the Codex CLI already installed on your computer.
+Codex Pane is a Windows 11 Codex workbench built on Codex app-server. It runs the `codex` command already installed on your computer and brings sessions, models, permissions, tool calls, and task status into one desktop interface. Choose the multi-pane workspace to run several tasks in parallel, or the session sidebar to focus on one conversation and switch through your session history.
 
 ## Screenshots
 
@@ -10,13 +10,13 @@ Codex Pane is a Windows 11 desktop workbench for local Codex sessions. It uses t
 
 Run several independent sessions in one window. Each pane has its own session, working directory, model, reasoning effort, and permission state.
 
-![Multi-pane workspace](docs/screenshots/multi-pane.png)
+<img src="docs/screenshots/multi-pane.png" alt="Multi-pane workspace" width="50%">
 
 ### Session Sidebar
 
 Focus on one session while browsing, searching, and switching sessions from the sidebar.
 
-![Session sidebar](docs/screenshots/session-sidebar.png)
+<img src="docs/screenshots/session-sidebar.png" alt="Session sidebar" width="50%">
 
 Switch modes at any time in Settings.
 
