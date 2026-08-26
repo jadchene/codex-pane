@@ -21,6 +21,12 @@ describe("renderer IPC contracts", () => {
     const request = safeRequestSchema.parse({ method: "turn/steer", params: { threadId: "thread-1", expectedTurnId: "turn-1", clientUserMessageId: "client-1", input: [{ type: "text", text: "hello", text_elements: [] }] } });
     expect(request.params).toMatchObject({ clientUserMessageId: "client-1" });
     expect(safeRequestSchema.parse({ method: "thread/settings/update", params: { threadId: "thread-1", permissions: ":workspace" } })).toMatchObject({ params: { permissions: ":workspace" } });
+    expect(safeRequestSchema.parse({ method: "thread/settings/update", params: { threadId: "thread-1", permissions: ":workspace", approvalPolicy: "on-request", approvalsReviewer: "auto_review" } })).toMatchObject({ params: { approvalsReviewer: "auto_review" } });
+    expect(safeRequestSchema.parse({ method: "thread/settings/update", params: { threadId: "thread-1", serviceTier: "priority", collaborationMode: { mode: "plan", settings: { model: "gpt-5", reasoning_effort: "high", developer_instructions: null } } } })).toMatchObject({ params: { serviceTier: "priority", collaborationMode: { mode: "plan" } } });
+    expect(() => safeRequestSchema.parse({ method: "thread/settings/update", params: { threadId: "thread-1", approvalsReviewer: "renderer" } })).toThrow();
+    expect(safeRequestSchema.parse({ method: "thread/name/set", params: { threadId: "thread-1", name: "新名称" } })).toMatchObject({ method: "thread/name/set" });
+    expect(safeRequestSchema.parse({ method: "thread/goal/set", params: { threadId: "thread-1", objective: "完成适配", status: "active" } })).toMatchObject({ method: "thread/goal/set" });
+    expect(safeRequestSchema.parse({ method: "fuzzyFileSearch", params: { query: "readme", roots: ["E:\\Work"], cancellationToken: null } })).toMatchObject({ method: "fuzzyFileSearch" });
     expect(safeRequestSchema.parse({ method: "turn/start", params: { threadId: "thread-1", clientUserMessageId: null, model: null, effort: null, input: [{ type: "skill", name: "project-verify", path: "E:\\Skills\\project-verify\\SKILL.md" }, { type: "mention", name: "README.md", path: "E:\\Work\\README.md" }, { type: "managedFile", id: "11111111-1111-4111-8111-111111111111", name: "notes.txt" }] } })).toMatchObject({ method: "turn/start" });
   });
 

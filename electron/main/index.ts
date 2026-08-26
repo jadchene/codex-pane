@@ -19,7 +19,7 @@ protocol.registerSchemesAsPrivileged([
 
 if (!app.isPackaged && process.env.CODEX_PANE_PERFORMANCE_FIXTURE === "1") app.disableHardwareAcceleration();
 
-if (!app.isPackaged && existsSync(join(app.getAppPath(), ".approval-fixture"))) {
+if (!app.isPackaged && (existsSync(join(app.getAppPath(), ".approval-fixture")) || existsSync(join(app.getAppPath(), ".session-fixture")))) {
   useCodexFixtureForTests(join(app.getAppPath(), "tests", "fixtures", "fake-codex", "fake-app-server.mjs"));
 }
 if (!app.isPackaged && process.env.CODEX_PANE_PERFORMANCE_FIXTURE === "1") {

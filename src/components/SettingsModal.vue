@@ -2,16 +2,17 @@
 import { computed, ref, watch } from "vue";
 import { NAutoComplete, NButton, NCard, NColorPicker, NDescriptions, NDescriptionsItem, NDivider, NForm, NFormItem, NInput, NInputNumber, NModal, NRadioButton, NRadioGroup, NSpace, NSwitch, NTag, NText } from "naive-ui";
 import { useWorkspaceStore } from "../stores/workspace";
-import type { AppearanceSettings, ThemeMode } from "../types";
+import type { AppearanceSettings, ThemeMode, WorkspaceMode } from "../types";
 
 const props = withDefaults(defineProps<{ show: boolean; commandShellPath?: string }>(), {
   commandShellPath: "C:\\Program Files\\PowerShell\\7\\pwsh.exe"
 });
-const emit = defineEmits<{ "update:show": [value: boolean]; "update:commandShellPath": [value: string] }>();
+const emit = defineEmits<{ "update:show": [value: boolean]; "update:commandShellPath": [value: string]; "update:workspaceMode": [value: WorkspaceMode] }>();
 const store = useWorkspaceStore();
 
 const updateAppearance = (appearance: Partial<AppearanceSettings>): void => store.updateAppearance(appearance);
 
+const workspaceMode = computed({ get: () => store.state.workspaceMode, set: (value: WorkspaceMode) => emit("update:workspaceMode", value) });
 const theme = computed({ get: () => store.state.appearance.theme, set: (value: ThemeMode) => updateAppearance({ theme: value }) });
 const fontFamily = computed({ get: () => store.state.appearance.fontFamily, set: (value: string) => updateAppearance({ fontFamily: value }) });
 const fontSize = computed({
@@ -60,6 +61,18 @@ watch(() => props.show, (show) => { if (show) void loadSystemFonts(); }, { immed
     @update:show="emit('update:show', $event)"
   >
     <NSpace vertical :size="18">
+      <section class="settings-section">
+        <div class="settings-section-heading"><NText strong>工作台</NText><NText depth="3">选择会话的查看方式。</NText></div>
+        <NForm label-placement="left" label-width="148" class="settings-form">
+          <NFormItem label="工作台模式">
+            <NRadioGroup v-model:value="workspaceMode" name="workspace-mode">
+              <NRadioButton value="panes">多窗格</NRadioButton>
+              <NRadioButton value="sessionSidebar">会话侧栏</NRadioButton>
+            </NRadioGroup>
+          </NFormItem>
+        </NForm>
+      </section>
+      <NDivider />
       <section class="settings-section">
         <div class="settings-section-heading"><NText strong>外观</NText><NText depth="3">更改会立即应用到整个窗口。</NText></div>
         <NForm label-placement="left" label-width="148" class="settings-form">
@@ -129,7 +142,9 @@ watch(() => props.show, (show) => { if (show) void loadSystemFonts(); }, { immed
 <style scoped>
 .settings-section { min-width: 0; }
 .settings-section-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.settings-section-heading > :first-child { font-weight: 700; }
 .settings-form { margin-top: 12px; }
+.settings-form :deep(.n-form-item-label), :deep(.n-descriptions-table-header) { font-weight: 600; }
 .directory-value { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .font-field { display: grid; width: 100%; gap: 5px; }
 .font-field .n-text { font-size: 12px; }

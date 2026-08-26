@@ -5,7 +5,7 @@ import { CloseOutline, GridOutline, ReloadOutline, ScanOutline, SettingsOutline 
 import hljs from "highlight.js/lib/core";
 import powershell from "highlight.js/lib/languages/powershell";
 import { useWorkspaceStore } from "./stores/workspace";
-import type { LayoutKind, PaneState } from "./types";
+import type { LayoutKind, PaneState, WorkspaceMode } from "./types";
 import { appearanceCssVars, appearanceThemeOverrides } from "./theme";
 import WorkspaceView from "./components/WorkspaceView.vue";
 import SessionDrawer from "./components/SessionDrawer.vue";
@@ -97,6 +97,18 @@ const confirmLayoutReduction = (): void => {
   pendingLayout.value = null;
 };
 
+const selectWorkspaceMode = (workspaceMode: WorkspaceMode): void => {
+  if (workspaceMode === store.state.workspaceMode) return;
+  if (workspaceMode === "panes") {
+    store.setWorkspaceMode(workspaceMode);
+    return;
+  }
+  const visiblePanes = store.state.panes.slice(0, layoutPaneCounts[store.state.layout]);
+  const activePane = visiblePanes.find((pane) => pane.id === store.state.focusedPaneId) ?? visiblePanes[0]!;
+  store.state.focusedPaneId = activePane.id;
+  store.setWorkspaceMode(workspaceMode);
+};
+
 const toggleFullScreen = async (): Promise<void> => {
   await window.codexPane.setFullScreen(!fullScreen.value);
 };
@@ -107,6 +119,11 @@ const controlWindow = async (action: "minimize" | "maximize" | "close"): Promise
 
 const openSessions = async (paneId: string): Promise<void> => {
   sessionPaneId.value = paneId;
+  if (store.state.workspaceMode === "sessionSidebar") {
+    await nextTick();
+    workspaceView.value?.focusSessionList();
+    return;
+  }
   sessionsOpen.value = true;
   sessionsShowAll.value = !sessionFilterCwd.value;
   try {
@@ -188,7 +205,7 @@ onUnmounted(() => {
               <div class="titlebar-drag-region" aria-hidden="true" />
               <div class="titlebar-actions">
                 <NTooltip><template #trigger><NButton quaternary circle size="small" aria-label="设置" @click="settingsOpen = true"><template #icon><NIcon :component="SettingsOutline" /></template></NButton></template>设置</NTooltip>
-                <NDropdown trigger="click" :options="layoutOptions" @select="selectLayout">
+                <NDropdown v-if="store.state.workspaceMode === 'panes'" trigger="click" :options="layoutOptions" @select="selectLayout">
                   <NButton quaternary circle size="small" :aria-label="`切换窗格布局，当前${layoutLabels[store.state.layout]}`"><template #icon><NIcon :component="GridOutline" /></template></NButton>
                 </NDropdown>
                 <NTooltip><template #trigger><NButton quaternary circle size="small" aria-label="重新连接 app-server" @click="store.reconnect"><template #icon><NIcon :component="ReloadOutline" /></template></NButton></template>重新连接 app-server</NTooltip>
@@ -212,7 +229,7 @@ onUnmounted(() => {
           </NLayout>
 
           <SessionDrawer :show="sessionsOpen" :pane="sessionPane" :threads="store.state.threads" :show-all="sessionsShowAll" :current-cwd="sessionFilterCwd" @update:show="value => value ? sessionsOpen = true : closeSessions()" @search="searchSessions" @scope="changeSessionScope" @resume="resumeSession" />
-          <SettingsModal :command-shell-path="store.state.appearance.commandShellPath" :show="settingsOpen" @update:command-shell-path="store.updateAppearance({ commandShellPath: $event })" @update:show="settingsOpen = $event" />
+          <SettingsModal :command-shell-path="store.state.appearance.commandShellPath" :show="settingsOpen" @update:command-shell-path="store.updateAppearance({ commandShellPath: $event })" @update:workspace-mode="selectWorkspaceMode" @update:show="settingsOpen = $event" />
           <NModal :show="pendingLayout !== null" preset="card" title="选择要保留的窗格" class="layout-reduction-modal" :mask-closable="false" @update:show="value => { if (!value) pendingLayout = null; }">
             <NSpace vertical :size="14">
               <NText>目标布局可显示 {{ targetPaneCount }} 个窗格。请选择要保留的窗格；未保留的会话仍可从历史记录恢复。</NText>

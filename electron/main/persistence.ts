@@ -9,6 +9,7 @@ const attachmentSchema = z.object({
   url: z.string().startsWith("codex-media://"),
   size: z.number().nonnegative(),
   kind: z.enum(["local", "remote"]).default("local"),
+  sourcePath: z.string().min(1).max(32_768).optional(),
   sourceUrl: z.string().url().startsWith("https://").optional(),
   protectedSourceUrl: z.string().max(16_384).optional()
 }).superRefine((attachment, context) => {
@@ -26,12 +27,18 @@ const paneSchema = z.object({
   references: z.array(z.object({ id: z.string().uuid(), name: z.string().min(1).max(512), path: z.string().min(1).max(32_768), managed: z.boolean().optional() })).max(20).default([]),
   model: z.string().nullable(),
   effort: z.string().nullable(),
+  activePermissionProfile: z.string().max(512).nullable().optional(),
+  approvalPolicy: z.enum(["untrusted", "on-request", "never"]).nullable().optional(),
+  approvalsReviewer: z.enum(["user", "auto_review", "guardian_subagent"]).nullable().optional(),
+  serviceTier: z.string().max(100).nullable().optional(),
+  collaborationMode: z.enum(["default", "plan"]).nullable().optional(),
   scrollTop: z.number().nonnegative().default(0),
   followTail: z.boolean().default(true)
 });
 
 export const workspaceStateSchema = z.object({
   version: z.literal(1),
+  workspaceMode: z.enum(["panes", "sessionSidebar"]).default("panes"),
   layout: z.enum(["single", "vertical", "horizontal", "quad", "fourColumns", "fourRows", "six"]),
   splitSizes: z.record(z.array(z.number().min(10).max(90)).min(2).max(4)).default({}),
   defaultCwd: z.string().max(32_768).default(""),

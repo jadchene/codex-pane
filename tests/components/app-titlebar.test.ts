@@ -5,6 +5,7 @@ import { NDropdown } from "naive-ui";
 import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "../../src/App.vue";
+import SettingsModal from "../../src/components/SettingsModal.vue";
 import { useWorkspaceStore } from "../../src/stores/workspace";
 
 describe("App titlebar", () => {
@@ -108,5 +109,67 @@ describe("App titlebar", () => {
     await wrapper.vm.$nextTick();
     expect(wrapper.text()).toContain("选择要保留的窗格");
     expect(store.state.layout).toBe("six");
+  });
+
+  it("switches to the session sidebar without changing the saved pane layout", async () => {
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    const store = useWorkspaceStore();
+    store.state.layout = "quad";
+    vi.spyOn(store, "initialize").mockResolvedValue(undefined);
+    vi.spyOn(store, "scheduleSave").mockImplementation(() => undefined);
+    vi.spyOn(store, "reconnect").mockResolvedValue(undefined);
+    const wrapper = mount(App, {
+      global: {
+        plugins: [pinia],
+        stubs: {
+          WorkspaceView: { template: "<main />" },
+          SessionDrawer: true,
+          SettingsModal: true,
+          NTooltip: { template: "<span><slot name='trigger' /><slot /></span>" }
+        }
+      }
+    });
+
+    wrapper.getComponent(SettingsModal).vm.$emit("update:workspaceMode", "sessionSidebar");
+    await wrapper.vm.$nextTick();
+    expect(store.state.workspaceMode).toBe("sessionSidebar");
+    expect(store.state.layout).toBe("quad");
+    expect(wrapper.findComponent(NDropdown).exists()).toBe(false);
+
+    wrapper.getComponent(SettingsModal).vm.$emit("update:workspaceMode", "panes");
+    await wrapper.vm.$nextTick();
+    expect(store.state.workspaceMode).toBe("panes");
+    expect(store.state.layout).toBe("quad");
+    expect(wrapper.findComponent(NDropdown).exists()).toBe(true);
+  });
+
+  it("keeps active work in the background when entering session-sidebar mode", async () => {
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    const store = useWorkspaceStore();
+    store.state.layout = "vertical";
+    store.state.panes[1]!.status = "running";
+    store.state.panes[1]!.activeTurnId = "turn-running";
+    vi.spyOn(store, "initialize").mockResolvedValue(undefined);
+    vi.spyOn(store, "scheduleSave").mockImplementation(() => undefined);
+    vi.spyOn(store, "reconnect").mockResolvedValue(undefined);
+    const wrapper = mount(App, {
+      global: {
+        plugins: [pinia],
+        stubs: {
+          WorkspaceView: { template: "<main />" },
+          SessionDrawer: true,
+          SettingsModal: true,
+          NTooltip: { template: "<span><slot name='trigger' /><slot /></span>" }
+        }
+      }
+    });
+
+    wrapper.getComponent(SettingsModal).vm.$emit("update:workspaceMode", "sessionSidebar");
+    await wrapper.vm.$nextTick();
+    expect(store.state.workspaceMode).toBe("sessionSidebar");
+    expect(store.state.panes[1]!.status).toBe("running");
+    expect(store.state.panes[1]!.activeTurnId).toBe("turn-running");
   });
 });

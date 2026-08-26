@@ -1,7 +1,7 @@
 import { computed, markRaw, ref, shallowReactive, watch } from "vue";
-import { defineStore } from "pinia";
+import { acceptHMRUpdate, defineStore } from "pinia";
 import type { ConnectionState, ProtocolEvent } from "../../electron/shared/contracts";
-import type { AppearanceSettings, AppState, ApprovalReviewState, BackgroundTerminalState, LayoutKind, McpServerState, ModelOption, PaneState, PendingServerRequest, SubAgentRuntimeState, ThreadSummary, UiItem, UiItemStatus } from "../types";
+import type { AppearanceSettings, AppState, ApprovalReviewState, BackgroundTerminalState, ItemAction, LayoutKind, McpServerState, ModelOption, PaneState, PendingServerRequest, SubAgentRuntimeState, ThreadSummary, UiItem, UiItemStatus, WorkspaceMode } from "../types";
 
 const DEFAULT_CONNECTION: ConnectionState = {
   phase: "stopped",
@@ -21,6 +21,7 @@ const DEFAULT_APPEARANCE: AppearanceSettings = {
 };
 const HISTORY_TURN_PAGE_SIZE = 12;
 const LAYOUT_PANE_COUNTS: Record<LayoutKind, number> = { single: 1, vertical: 2, horizontal: 2, quad: 4, fourColumns: 4, fourRows: 4, six: 6 };
+const SIDEBAR_PANE_PREFIX = "sidebar-pane-";
 
 const createPane = (index: number): PaneState => ({
   id: `pane-${index + 1}`,
@@ -32,6 +33,11 @@ const createPane = (index: number): PaneState => ({
   references: [],
   skills: [],
   activePermissionProfile: null,
+  approvalPolicy: null,
+  approvalsReviewer: null,
+  serviceTier: null,
+  collaborationMode: null,
+  goal: null,
   model: null,
   effort: null,
   activeTurnId: null,
@@ -55,6 +61,8 @@ const createPane = (index: number): PaneState => ({
 
 const getRecord = (value: unknown): Record<string, unknown> => value && typeof value === "object" ? value as Record<string, unknown> : {};
 const getString = (value: unknown): string | null => typeof value === "string" ? value : null;
+const getApprovalPolicy = (value: unknown): PaneState["approvalPolicy"] => ["untrusted", "on-request", "never"].includes(String(value)) ? value as NonNullable<PaneState["approvalPolicy"]> : null;
+const getApprovalsReviewer = (value: unknown): PaneState["approvalsReviewer"] => ["user", "auto_review", "guardian_subagent"].includes(String(value)) ? value as NonNullable<PaneState["approvalsReviewer"]> : null;
 const formatAuthMode = (mode: string | null): string | null => {
   if (!mode) return null;
   if (["apikey", "apiKey", "headers", "agentIdentity", "personalAccessToken", "bedrockApiKey"].includes(mode)) return "API 模式";
@@ -65,6 +73,7 @@ const formatAuthMode = (mode: string | null): string | null => {
 export const useWorkspaceStore = defineStore("workspace", () => {
   const state = ref<AppState>({
     connection: DEFAULT_CONNECTION,
+    workspaceMode: "panes",
     layout: "single",
     splitSizes: {},
     defaultCwd: "",
@@ -81,6 +90,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     effectiveConfig: null,
     permissionProfiles: [],
     threads: [],
+    sidebarUnreadThreadIds: [],
     notices: [],
     initialized: false
   });
@@ -144,6 +154,13 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     return panes;
   });
   const pendingCount = computed(() => state.value.pendingRequests.length);
+  const isPaneWorking = (pane: PaneState): boolean => Boolean(
+    pane.activeTurnId
+    || pane.status === "starting"
+    || pane.status === "running"
+    || pane.status === "interrupting"
+    || state.value.pendingRequests.some((request) => request.paneId === pane.id)
+  );
 
   const initialize = async (): Promise<void> => {
     let bootstrapping = true;
@@ -164,6 +181,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     const bootstrap = await window.codexPane.bootstrap();
     state.value.connection = bufferedConnection ?? bootstrap.connection;
     if (bootstrap.workspace) {
+      state.value.workspaceMode = bootstrap.workspace.workspaceMode;
       state.value.layout = bootstrap.workspace.layout;
       state.value.splitSizes = bootstrap.workspace.splitSizes;
       state.value.defaultCwd = bootstrap.workspace.defaultCwd;
@@ -282,6 +300,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
       if (pane) pane.title = getString(params.threadName) || defaultPaneTitle(pane);
       const thread = state.value.threads.find((candidate) => candidate.id === threadId);
       if (thread) thread.name = getString(params.threadName);
+      if (pane) upsertLiveThread(pane);
       scheduleSave();
       return;
     }
@@ -312,12 +331,52 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     if (!pane) {
       return;
     }
+    const wasWorking = isPaneWorking(pane);
     const activePaneId = document.activeElement instanceof Element ? document.activeElement.closest("[data-pane-id]")?.getAttribute("data-pane-id") : null;
     pane.unread = document.hidden || activePaneId !== pane.id;
     reducePaneNotification(pane, method, params);
+    if (state.value.workspaceMode === "sessionSidebar" && state.value.focusedPaneId !== pane.id && wasWorking && !isPaneWorking(pane) && pane.threadId) {
+      void releaseSidebarPane(pane, true);
+    }
   };
 
   const reducePaneNotification = (pane: PaneState, method: string, params: Record<string, unknown>): void => {
+    if (method === "thread/goal/updated") {
+      const previousGoal = pane.goal;
+      const goal = getRecord(params.goal);
+      const previousStatus = getString(previousGoal?.status);
+      const status = getString(goal.status);
+      const objective = getString(goal.objective) ?? "";
+      pane.goal = goal;
+      if (!previousGoal || getString(previousGoal.objective) !== objective || previousStatus !== status) {
+        appendPaneItem(pane, {
+          id: crypto.randomUUID(),
+          turnId: "local",
+          type: "goalStatus",
+          data: {
+            state: status === "paused" ? "paused" : status === "active" && previousStatus === "paused" ? "resumed" : status ?? "active",
+            objective
+          },
+          streamText: "",
+          status: "completed"
+        });
+      }
+      scheduleSave();
+      return;
+    }
+    if (method === "thread/goal/cleared") {
+      pane.goal = null;
+      appendPaneItem(pane, {
+        id: crypto.randomUUID(),
+        turnId: "local",
+        type: "goalStatus",
+        data: { state: "empty" },
+        streamText: "",
+        status: "completed"
+      });
+      scheduleSave();
+      return;
+    }
     if (method === "thread/status/changed") {
       const statusRecord = getRecord(params.status);
       const status = getString(statusRecord.type) ?? getString(params.status);
@@ -341,10 +400,64 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     }
     if (method === "thread/settings/updated") {
       const settings = getRecord(params.threadSettings);
-      pane.cwd = getString(settings.cwd) ?? pane.cwd;
-      pane.model = getString(settings.model) ?? pane.model;
+      const previous = {
+        cwd: pane.cwd,
+        model: pane.model,
+        effort: pane.effort,
+        permissionProfile: pane.activePermissionProfile,
+        approvalPolicy: pane.approvalPolicy,
+        approvalsReviewer: pane.approvalsReviewer,
+        serviceTier: pane.serviceTier,
+        collaborationMode: pane.collaborationMode
+      };
+      if (Object.hasOwn(settings, "cwd")) pane.cwd = getString(settings.cwd) ?? pane.cwd;
+      if (Object.hasOwn(settings, "model")) pane.model = getString(settings.model);
       if (Object.hasOwn(settings, "effort")) pane.effort = getString(settings.effort);
-      pane.activePermissionProfile = getString(getRecord(settings.activePermissionProfile).id) ?? pane.activePermissionProfile;
+      if (Object.hasOwn(settings, "activePermissionProfile")) pane.activePermissionProfile = getString(getRecord(settings.activePermissionProfile).id);
+      if (Object.hasOwn(settings, "approvalPolicy")) pane.approvalPolicy = getApprovalPolicy(settings.approvalPolicy);
+      if (Object.hasOwn(settings, "approvalsReviewer") || Object.hasOwn(settings, "approvalReviewer")) {
+        pane.approvalsReviewer = getApprovalsReviewer(settings.approvalsReviewer) ?? getApprovalsReviewer(settings.approvalReviewer);
+      }
+      if (Object.hasOwn(settings, "serviceTier")) pane.serviceTier = getString(settings.serviceTier);
+      const collaborationMode = getRecord(settings.collaborationMode);
+      const mode = getString(collaborationMode.mode);
+      if (mode === "plan" || mode === "default") pane.collaborationMode = mode;
+      const changes: Array<{ label: string; value: string }> = [];
+      const permissionChanged = previous.permissionProfile !== pane.activePermissionProfile
+        || previous.approvalPolicy !== pane.approvalPolicy
+        || previous.approvalsReviewer !== pane.approvalsReviewer;
+      if (permissionChanged) {
+        const permissionLabel = pane.approvalsReviewer === "auto_review" || pane.approvalsReviewer === "guardian_subagent"
+          ? "自动审批"
+          : pane.approvalPolicy === "never" || pane.activePermissionProfile === ":danger-full-access"
+            ? "完全访问"
+            : pane.activePermissionProfile === ":read-only"
+              ? "只读"
+              : "请求审批";
+        changes.push({ label: "权限模式", value: permissionLabel });
+      }
+      if (previous.collaborationMode !== pane.collaborationMode) {
+        changes.push({ label: "协作模式", value: pane.collaborationMode === "plan" ? "计划模式" : "默认模式" });
+      }
+      if (previous.serviceTier !== pane.serviceTier) {
+        const model = state.value.models.find((candidate) => candidate.value === pane.model);
+        const tier = model?.serviceTiers.find((candidate) => candidate.id === pane.serviceTier);
+        const tierLabel = tier?.name.toLocaleLowerCase() === "fast" ? "快速模式" : tier?.name ?? pane.serviceTier ?? "默认模式";
+        changes.push({ label: "服务模式", value: pane.serviceTier === "default" || !pane.serviceTier ? "标准模式" : tierLabel });
+      }
+      if (previous.cwd !== pane.cwd) changes.push({ label: "工作目录", value: pane.cwd });
+      if (previous.model !== pane.model) changes.push({ label: "模型", value: pane.model ?? "默认" });
+      if (previous.effort !== pane.effort) changes.push({ label: "推理强度", value: pane.effort ?? "默认" });
+      if (changes.length) {
+        appendPaneItem(pane, {
+          id: crypto.randomUUID(),
+          turnId: "local",
+          type: "threadSettingsChanged",
+          data: { changes },
+          streamText: "",
+          status: "completed"
+        });
+      }
       scheduleSave();
       return;
     }
@@ -436,6 +549,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
         index?.set(itemKey(existing.turnId, existing.id), existing);
       }
       syncSubAgentState(pane, existing);
+      syncBackgroundTerminalState(pane, existing);
       return;
     }
     if (completed && getString(item.type) === "reasoning" && !hasReasoningContent({ id: itemId, turnId, type: "reasoning", data: item, streamText: "", status: "completed" })) return;
@@ -449,6 +563,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     };
     const appendedItem = appendPaneItem(pane, nextItem);
     syncSubAgentState(pane, appendedItem);
+    syncBackgroundTerminalState(pane, appendedItem);
   };
 
   const resolveItemStatus = (item: Record<string, unknown>, completed: boolean): UiItemStatus => {
@@ -561,6 +676,29 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     }
   };
 
+  const syncBackgroundTerminalState = (pane: PaneState, item: UiItem): void => {
+    if (item.type !== "commandExecution") return;
+    const processId = getString(item.data.processId);
+    if (!processId) return;
+    const terminals = pane.backgroundTerminals ?? (pane.backgroundTerminals = []);
+    const index = terminals.findIndex((terminal) => terminal.processId === processId);
+    if (getString(item.data.status) !== "inProgress") {
+      if (index >= 0) terminals.splice(index, 1);
+      return;
+    }
+    const terminal: BackgroundTerminalState = {
+      itemId: item.id,
+      processId,
+      command: getString(item.data.command) ?? "",
+      cwd: getString(item.data.cwd) ?? pane.cwd,
+      osPid: typeof item.data.osPid === "number" ? item.data.osPid : null,
+      cpuPercent: null,
+      rssKb: null
+    };
+    if (index >= 0) terminals[index] = terminal;
+    else terminals.push(terminal);
+  };
+
   const mergeDelta = (pane: PaneState, params: Record<string, unknown>): void => {
     const itemId = getString(params.itemId);
     const turnId = getString(params.turnId) ?? pane.activeTurnId ?? "unknown-turn";
@@ -638,12 +776,20 @@ export const useWorkspaceStore = defineStore("workspace", () => {
           ? model.supportedReasoningEfforts.map((effort) => getString(getRecord(effort).reasoningEffort)).filter((effort): effort is string => Boolean(effort))
           : [];
         const modalities = Array.isArray(model.inputModalities) ? model.inputModalities.filter((item): item is string => typeof item === "string") : [];
+        const serviceTiers = Array.isArray(model.serviceTiers)
+          ? model.serviceTiers.map((rawTier) => {
+            const tier = getRecord(rawTier);
+            const id = getString(tier.id);
+            return id ? { id, name: getString(tier.name) ?? id, description: getString(tier.description) ?? "" } : null;
+          }).filter((tier): tier is { id: string; name: string; description: string } => tier !== null)
+          : [];
         return {
           label: getString(model.displayName) ?? getString(model.id) ?? "未知模型",
           value: getString(model.id) ?? "",
           efforts,
           inputModalities: modalities,
           defaultEffort: getString(model.defaultReasoningEffort),
+          serviceTiers,
           isDefault: model.isDefault === true
         };
       }).filter((model) => model.value);
@@ -856,10 +1002,23 @@ export const useWorkspaceStore = defineStore("workspace", () => {
           initialTurnsPage: { limit: HISTORY_TURN_PAGE_SIZE, sortDirection: "desc", itemsView: "full" }
         }
       })
-        .then((response) => {
+        .then(async (response) => {
           if (pane.threadId !== requestedThreadId) return;
           const result = getRecord(response);
+          const goalResponse = getRecord(await window.codexPane.request({ method: "thread/goal/get", params: { threadId: requestedThreadId } }));
+          if (pane.threadId !== requestedThreadId) return;
+          const persistedCollaborationMode = pane.collaborationMode;
           hydrateThread(pane, getRecord(result.thread), getRecord(result.initialTurnsPage));
+          pane.cwd = getString(result.cwd) ?? pane.cwd;
+          pane.model = getString(result.model) ?? pane.model;
+          pane.effort = getString(result.reasoningEffort) ?? pane.effort;
+          pane.activePermissionProfile = getString(getRecord(result.activePermissionProfile).id);
+          pane.approvalPolicy = getApprovalPolicy(result.approvalPolicy);
+          pane.approvalsReviewer = getApprovalsReviewer(result.approvalsReviewer) ?? getApprovalsReviewer(result.approvalReviewer);
+          pane.serviceTier = getString(result.serviceTier);
+          const resumedMode = getString(getRecord(result.collaborationMode).mode);
+          pane.collaborationMode = resumedMode === "plan" || resumedMode === "default" ? resumedMode : persistedCollaborationMode;
+          pane.goal = goalResponse.goal ? getRecord(goalResponse.goal) : null;
           pane.error = null;
         })
         .catch((error) => {
@@ -882,7 +1041,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     }));
     if (requestId !== threadListRequestId) return;
     const data = Array.isArray(response.data) ? response.data : [];
-    state.value.threads = data.map((rawThread): ThreadSummary => {
+    const listedThreads = data.map((rawThread): ThreadSummary => {
       const thread = getRecord(rawThread);
       return {
         id: getString(thread.id) ?? "",
@@ -893,6 +1052,19 @@ export const useWorkspaceStore = defineStore("workspace", () => {
         status: getString(getRecord(thread.status).type) ?? getString(thread.status) ?? "notLoaded"
       };
     }).filter((thread) => thread.id);
+    const listedIds = new Set(listedThreads.map((thread) => thread.id));
+    const normalizedSearch = searchTerm.trim().toLocaleLowerCase();
+    const liveThreads = state.value.panes.filter((pane) => pane.threadId && !listedIds.has(pane.threadId) && (!cwd || pane.cwd === cwd) && (!normalizedSearch || pane.title.toLocaleLowerCase().includes(normalizedSearch)))
+      .map((pane): ThreadSummary => ({ id: pane.threadId!, name: pane.title, preview: pane.title, cwd: pane.cwd, updatedAt: Date.now() / 1000, status: isPaneWorking(pane) ? "active" : "idle" }));
+    state.value.threads = [...liveThreads, ...listedThreads];
+  };
+
+  const upsertLiveThread = (pane: PaneState): void => {
+    if (!pane.threadId) return;
+    const summary: ThreadSummary = { id: pane.threadId, name: pane.title, preview: pane.title, cwd: pane.cwd, updatedAt: Date.now() / 1000, status: isPaneWorking(pane) ? "active" : "idle" };
+    const index = state.value.threads.findIndex((thread) => thread.id === pane.threadId);
+    if (index >= 0) state.value.threads[index] = { ...state.value.threads[index]!, ...summary };
+    else state.value.threads.unshift(summary);
   };
 
   const resumeThread = async (pane: PaneState, threadId: string): Promise<void> => {
@@ -904,6 +1076,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
       throw new Error(`该会话已绑定到${duplicate.title}，不能同时在两个可编辑窗格中打开。`);
     }
     pane.status = "starting";
+    const persistedCollaborationMode = pane.threadId === threadId ? pane.collaborationMode : null;
     try {
       const response = getRecord(await window.codexPane.request({
         method: "thread/resume",
@@ -913,11 +1086,18 @@ export const useWorkspaceStore = defineStore("workspace", () => {
           initialTurnsPage: { limit: HISTORY_TURN_PAGE_SIZE, sortDirection: "desc", itemsView: "full" }
         }
       }));
+      const goalResponse = getRecord(await window.codexPane.request({ method: "thread/goal/get", params: { threadId } }));
       hydrateThread(pane, getRecord(response.thread), getRecord(response.initialTurnsPage));
       pane.cwd = getString(response.cwd) ?? pane.cwd;
       pane.model = getString(response.model) ?? pane.model;
       pane.effort = getString(response.reasoningEffort) ?? pane.effort;
       pane.activePermissionProfile = getString(getRecord(response.activePermissionProfile).id);
+      pane.approvalPolicy = getApprovalPolicy(response.approvalPolicy);
+      pane.approvalsReviewer = getApprovalsReviewer(response.approvalsReviewer) ?? getApprovalsReviewer(response.approvalReviewer);
+      pane.serviceTier = getString(response.serviceTier);
+      const resumedMode = getString(getRecord(response.collaborationMode).mode);
+      pane.collaborationMode = resumedMode === "plan" || resumedMode === "default" ? resumedMode : persistedCollaborationMode;
+      pane.goal = goalResponse.goal ? getRecord(goalResponse.goal) : null;
       pane.error = null;
       scheduleSave();
     } catch (error) {
@@ -944,7 +1124,6 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     if (threadId) {
       pane.threadId = threadId;
     }
-    pane.title = getString(thread.name) || defaultPaneTitle(pane);
     const pagedTurns = historyPage && Array.isArray(historyPage.data) ? [...historyPage.data].reverse() : null;
     const turns = pagedTurns ?? (Array.isArray(thread.turns) ? thread.turns : []);
     const activeTurn = [...turns].reverse().map(getRecord).find((turn) => getString(turn.status) === "inProgress") ?? null;
@@ -957,7 +1136,13 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     pane.backgroundTerminals = [];
     pane.subAgents = {};
     pane.activePermissionProfile = null;
+    pane.approvalPolicy = null;
+    pane.approvalsReviewer = null;
+    pane.serviceTier = null;
+    pane.collaborationMode = null;
+    pane.goal = null;
     pane.items = createItemsFromTurns(turns);
+    pane.title = getString(thread.name) || defaultPaneTitle(pane);
     pane.historyCursor = historyPage ? getString(historyPage.nextCursor) : null;
     pane.historyLoading = false;
     indexPaneItems(pane);
@@ -1027,8 +1212,14 @@ export const useWorkspaceStore = defineStore("workspace", () => {
       pane.model = getString(response.model) ?? pane.model;
       pane.effort = getString(response.reasoningEffort) ?? pane.effort;
       pane.activePermissionProfile = getString(getRecord(response.activePermissionProfile).id);
+      pane.approvalPolicy = getApprovalPolicy(response.approvalPolicy);
+      pane.approvalsReviewer = getApprovalsReviewer(response.approvalsReviewer) ?? getApprovalsReviewer(response.approvalReviewer);
+      pane.serviceTier = getString(response.serviceTier);
+      const startedMode = getString(getRecord(response.collaborationMode).mode);
+      pane.collaborationMode = startedMode === "plan" || startedMode === "default" ? startedMode : null;
       pane.cwd = getString(response.cwd) ?? effectiveCwd ?? "";
       pane.status = "idle";
+      upsertLiveThread(pane);
       scheduleSave();
       return threadId;
     }).finally(() => threadCreations.delete(pane.id));
@@ -1060,8 +1251,8 @@ export const useWorkspaceStore = defineStore("workspace", () => {
           ...submittedSkills.map((skill) => ({ type: "skill", name: skill.name, path: skill.path })),
           ...submittedReferences.map((reference) => ({ type: "mention", name: reference.name, path: reference.path })),
           ...submittedAttachments.map((attachment) => attachment.kind === "remote"
-            ? { type: "image", url: attachment.url }
-            : { type: "localImage", path: attachment.name })
+            ? { type: "image", url: attachment.sourceUrl ?? attachment.url }
+            : { type: "localImage", path: attachment.sourcePath ?? attachment.name })
         ]
       },
       streamText: "",
@@ -1129,6 +1320,12 @@ export const useWorkspaceStore = defineStore("workspace", () => {
 
   const executeSlashCommand = async (pane: PaneState, command: string): Promise<void> => {
     try {
+      const [commandName = "", ...argumentParts] = command.trim().split(/\s+/);
+      command = ({ permission: "permissions", cwd: "cd", processes: "ps", "kill-processes": "stop" } as Record<string, string>)[commandName] ?? commandName;
+      const argument = argumentParts.join(" ").trim();
+      const appendLocal = (type: string, data: Record<string, unknown>): UiItem => appendPaneItem(pane, createUiItem({
+        id: crypto.randomUUID(), turnId: "local", type, data, streamText: "", status: "completed"
+      }));
       if (command === "status") {
         const lastUsage = getRecord(pane.tokenUsage?.last);
         const usedTokens = typeof lastUsage.totalTokens === "number" ? Math.max(0, Math.round(lastUsage.totalTokens)) : 0;
@@ -1154,11 +1351,70 @@ export const useWorkspaceStore = defineStore("workspace", () => {
         });
         return;
       }
-      if (command === "cwd") {
+      if (command === "cd") {
         await chooseDirectory(pane);
         return;
       }
       const threadId = await ensureThread(pane);
+      if (command === "rename") {
+        if (!argument) throw new Error("请输入新的会话名称。" );
+        await window.codexPane.request({ method: "thread/name/set", params: { threadId, name: argument } });
+        pane.title = argument;
+        upsertLiveThread(pane);
+        scheduleSave();
+        return;
+      }
+      if (command === "goal") {
+        if (!argument) {
+          const result = getRecord(await window.codexPane.request({ method: "thread/goal/get", params: { threadId } }));
+          const rawGoal = Object.hasOwn(result, "goal") ? result.goal : result;
+          const goal = rawGoal && typeof rawGoal === "object" ? getRecord(rawGoal) : null;
+          pane.goal = goal;
+          const status = getString(goal?.status);
+          appendLocal("goalStatus", {
+            state: !goal ? "empty" : status === "paused" ? "paused" : status ?? "active",
+            objective: getString(goal?.objective) ?? ""
+          });
+          return;
+        }
+        if (argument.toLowerCase() === "clear") {
+          await window.codexPane.request({ method: "thread/goal/clear", params: { threadId } });
+        } else {
+          const status = ({ pause: "paused", resume: "active" } as const)[argument.toLowerCase() as "pause" | "resume"];
+          await window.codexPane.request({
+            method: "thread/goal/set",
+            params: status ? { threadId, status } : { threadId, objective: argument, status: "active" }
+          });
+        }
+        return;
+      }
+      if (command === "plan") {
+        const response = getRecord(await window.codexPane.request({ method: "collaborationMode/list", params: {} }));
+        const availableModes = Array.isArray(response.data) ? response.data.map(getRecord) : [];
+        const planMask = availableModes.find((mode) => getString(mode.mode) === "plan");
+        const planMode = {
+          mode: "plan" as const,
+          settings: {
+            model: getString(planMask?.model) ?? pane.model ?? "",
+            reasoning_effort: getString(planMask?.reasoning_effort) ?? pane.effort,
+            developer_instructions: null
+          }
+        };
+        await window.codexPane.request({ method: "thread/settings/update", params: { threadId, collaborationMode: planMode } });
+        if (argument) {
+          pane.draft = argument;
+          await send(pane);
+        }
+        return;
+      }
+      if (command === "fast") {
+        const model = state.value.models.find((candidate) => candidate.value === pane.model);
+        const fastTier = model?.serviceTiers.find((tier) => tier.name.toLocaleLowerCase() === "fast");
+        if (!fastTier) throw new Error("当前模型不支持快速模式。" );
+        const serviceTier = pane.serviceTier === fastTier.id ? "default" : fastTier.id;
+        await window.codexPane.request({ method: "thread/settings/update", params: { threadId, serviceTier } });
+        return;
+      }
       if (command === "compact") {
         await window.codexPane.request({ method: "thread/compact/start", params: { threadId } });
         return;
@@ -1182,41 +1438,58 @@ export const useWorkspaceStore = defineStore("workspace", () => {
         pane.items.push({ id: crypto.randomUUID(), turnId: "local", type: "agents", data: { agents: Array.isArray(result.data) ? result.data : [] }, streamText: "", status: "completed" });
         return;
       }
-      if (command === "processes") {
+      if (command === "ps") {
         const processes = await refreshBackgroundTerminals(pane);
         pane.items.push({ id: crypto.randomUUID(), turnId: "local", type: "backgroundProcesses", data: { processes }, streamText: "", status: "completed" });
         return;
       }
-      if (command === "kill-processes") {
+      if (command === "stop") {
         const result = await stopAllBackgroundProcesses(pane);
         pane.items.push({ id: crypto.randomUUID(), turnId: "local", type: "backgroundProcesses", data: { processes: [], result }, streamText: "", status: "completed" });
         return;
       }
       if (command === "permissions") {
-        pane.items.push({
-          id: crypto.randomUUID(),
-          turnId: "local",
-          type: "permissions",
-          data: { profiles: state.value.permissionProfiles.filter((profile) => profile.allowed), currentProfile: pane.activePermissionProfile },
-          streamText: "",
-          status: "completed"
+        const findProfile = (id: string) => state.value.permissionProfiles.find((profile) => profile.allowed && profile.id.replace(/^:/, "") === id.replace(/^:/, ""));
+        const readOnly = findProfile(":read-only");
+        const workspace = findProfile(":workspace");
+        const fullAccess = findProfile(":danger-full-access");
+        const modes = [
+          readOnly && { id: "readOnly", label: "只读", description: "可读取当前工作区；编辑文件或访问网络需要确认。", profileId: readOnly.id, approvalPolicy: "on-request", approvalsReviewer: "user" },
+          workspace && { id: "ask", label: "请求审批", description: "可读写当前工作区并运行命令；联网或修改其他位置需要确认。", profileId: workspace.id, approvalPolicy: "on-request", approvalsReviewer: "user" },
+          workspace && { id: "auto", label: "自动审批", description: "仅对检测为可能不安全的操作询问。", profileId: workspace.id, approvalPolicy: "on-request", approvalsReviewer: "auto_review" },
+          fullAccess && { id: "full", label: "完全访问", description: "可修改工作区外文件并访问网络，不再询问。", profileId: fullAccess.id, approvalPolicy: "never", approvalsReviewer: "user" }
+        ].filter(Boolean);
+        appendLocal("permissions", {
+          modes,
+          currentProfile: pane.activePermissionProfile,
+          currentApprovalPolicy: pane.approvalPolicy ?? state.value.effectiveConfig?.approvalPolicy,
+          currentApprovalsReviewer: pane.approvalsReviewer ?? state.value.effectiveConfig?.approvalReviewer
         });
         return;
       }
-      const result = command === "mcp"
-        ? await refreshMcpServers(threadId)
-        : getRecord(await window.codexPane.request({ method: "skills/list", params: { cwds: pane.cwd ? [pane.cwd] : [], forceReload: false } }));
-      if (command === "skills") updatePaneSkills(pane, result);
-      pane.items.push({ id: crypto.randomUUID(), turnId: "local", type: command === "mcp" ? "mcpStatus" : "skills", data: result, streamText: "", status: "completed" });
+      if (command === "mcp") {
+        const result = await refreshMcpServers(threadId);
+        pane.items.push({ id: crypto.randomUUID(), turnId: "local", type: "mcpStatus", data: result, streamText: "", status: "completed" });
+        return;
+      }
+      if (command === "skills") {
+        const result = getRecord(await window.codexPane.request({ method: "skills/list", params: { cwds: pane.cwd ? [pane.cwd] : [], forceReload: false } }));
+        updatePaneSkills(pane, result);
+        pane.items.push({ id: crypto.randomUUID(), turnId: "local", type: "skills", data: result, streamText: "", status: "completed" });
+        return;
+      }
+      throw new Error(`不支持的命令：/${command}`);
     } catch (error) {
       pane.error = `命令执行失败：${error instanceof Error ? error.message : String(error)}`;
     }
   };
 
-  const handleItemAction = async (
-    pane: PaneState,
-    action: { type: "switchAgent"; threadId: string } | { type: "stopBackgroundProcess"; processId: string } | { type: "stopAllBackgroundProcesses" } | { type: "switchPermissionProfile"; profileId: string }
-  ): Promise<void> => {
+  const handleItemAction = async (pane: PaneState, action: ItemAction): Promise<void> => {
+    if (action.type === "dismissItem") {
+      pane.items = pane.items.filter((item) => item.id !== action.itemId);
+      indexPaneItems(pane);
+      return;
+    }
     if (action.type === "switchAgent") {
       await resumeThread(pane, action.threadId);
       return;
@@ -1225,16 +1498,21 @@ export const useWorkspaceStore = defineStore("workspace", () => {
       await stopBackgroundProcess(pane, action.processId);
       return;
     }
-    if (action.type === "switchPermissionProfile") {
+    if (action.type === "switchPermissionMode") {
       const profile = state.value.permissionProfiles.find((candidate) => candidate.id === action.profileId && candidate.allowed);
       if (!profile) {
         pane.error = "这个权限模式当前不可用。";
         return;
       }
       const threadId = await ensureThread(pane);
-      await window.codexPane.request({ method: "thread/settings/update", params: { threadId, permissions: profile.id } });
-      pane.activePermissionProfile = profile.id;
-      for (const item of pane.items.filter((candidate) => candidate.type === "permissions")) item.data.currentProfile = profile.id;
+      try {
+        await window.codexPane.request({ method: "thread/settings/update", params: { threadId, permissions: profile.id, approvalPolicy: action.approvalPolicy, approvalsReviewer: action.approvalsReviewer } });
+      } catch (error) {
+        pane.error = `无法切换权限模式：${error instanceof Error ? error.message : String(error)}`;
+        return;
+      }
+      pane.items = pane.items.filter((candidate) => candidate.type !== "permissions");
+      indexPaneItems(pane);
       pane.error = null;
       return;
     }
@@ -1259,7 +1537,18 @@ export const useWorkspaceStore = defineStore("workspace", () => {
       pane.error = "当前任务或确认请求尚未结束，请处理完成后再新建会话。";
       return;
     }
+    pane.title = "新会话";
     pane.threadId = null;
+    pane.draft = "";
+    pane.attachments = [];
+    pane.references = [];
+    pane.skills = [];
+    pane.activePermissionProfile = null;
+    pane.approvalPolicy = null;
+    pane.approvalsReviewer = null;
+    pane.serviceTier = null;
+    pane.collaborationMode = null;
+    pane.goal = null;
     pane.activeTurnId = null;
     pane.status = "idle";
     pane.items = [];
@@ -1292,6 +1581,11 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     pane.references = [];
     pane.skills = [];
     pane.activePermissionProfile = null;
+    pane.approvalPolicy = null;
+    pane.approvalsReviewer = null;
+    pane.serviceTier = null;
+    pane.collaborationMode = null;
+    pane.goal = null;
     pane.activeTurnId = null;
     pane.status = "idle";
     pane.items = [];
@@ -1311,9 +1605,99 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     pane.historyLoading = false;
   };
 
+  const rememberSidebarUnread = (threadId: string): void => {
+    if (!state.value.sidebarUnreadThreadIds.includes(threadId)) state.value.sidebarUnreadThreadIds.push(threadId);
+  };
+
+  const clearSidebarUnread = (threadId: string): void => {
+    state.value.sidebarUnreadThreadIds = state.value.sidebarUnreadThreadIds.filter((candidate) => candidate !== threadId);
+  };
+
+  const releaseSidebarPane = async (pane: PaneState, unread: boolean, preserveContainer = false): Promise<void> => {
+    const threadId = pane.threadId;
+    if (unread && threadId) rememberSidebarUnread(threadId);
+    if (threadId) {
+      try {
+        await window.codexPane.request({ method: "thread/unsubscribe", params: { threadId } });
+      } catch {
+        // Local state is still released; subsequent unmatched events are ignored.
+      }
+    }
+    if (pane.threadId !== threadId || isPaneWorking(pane)) return;
+    resetPane(pane);
+    if (!preserveContainer && pane.id.startsWith(SIDEBAR_PANE_PREFIX)) {
+      state.value.panes = state.value.panes.filter((candidate) => candidate !== pane);
+    }
+    scheduleSave();
+  };
+
+  const createSidebarPane = (): PaneState => {
+    const pane = createPane(state.value.panes.length);
+    pane.id = `${SIDEBAR_PANE_PREFIX}${crypto.randomUUID()}`;
+    state.value.panes.push(pane);
+    return pane;
+  };
+
+  const switchSidebarThread = async (currentPane: PaneState, threadId: string): Promise<PaneState> => {
+    if (currentPane.threadId === threadId) {
+      currentPane.unread = false;
+      clearSidebarUnread(threadId);
+      return currentPane;
+    }
+    const boundPane = state.value.panes.find((pane) => pane.threadId === threadId);
+    if (boundPane) {
+      if (!isPaneWorking(currentPane)) await releaseSidebarPane(currentPane, false, true);
+      boundPane.unread = false;
+      clearSidebarUnread(threadId);
+      state.value.focusedPaneId = boundPane.id;
+      scheduleSave();
+      return boundPane;
+    }
+    const destination = state.value.panes.find((pane) => pane !== currentPane && !pane.threadId && !isPaneWorking(pane)) ?? createSidebarPane();
+    clearSidebarUnread(threadId);
+    try {
+      await resumeThread(destination, threadId);
+    } catch (error) {
+      const message = destination.error ?? `无法恢复会话：${error instanceof Error ? error.message : String(error)}`;
+      resetPane(destination);
+      if (destination.id.startsWith(SIDEBAR_PANE_PREFIX)) state.value.panes = state.value.panes.filter((pane) => pane !== destination);
+      throw new Error(message);
+    }
+    if (!isPaneWorking(currentPane)) await releaseSidebarPane(currentPane, false);
+    state.value.focusedPaneId = destination.id;
+    scheduleSave();
+    return destination;
+  };
+
+  const newSidebarThread = async (currentPane: PaneState): Promise<PaneState> => {
+    let destination = currentPane;
+    if (isPaneWorking(currentPane)) {
+      destination = state.value.panes.find((pane) => pane !== currentPane && !pane.threadId && !isPaneWorking(pane)) ?? createSidebarPane();
+    } else {
+      await releaseSidebarPane(currentPane, false, true);
+    }
+    resetPane(destination);
+    state.value.focusedPaneId = destination.id;
+    scheduleSave();
+    return destination;
+  };
+
   const setLayout = (layout: LayoutKind): void => {
     state.value.layout = layout;
     state.value.focusedPaneId = null;
+    scheduleSave();
+  };
+
+  const setWorkspaceMode = (workspaceMode: WorkspaceMode): void => {
+    state.value.workspaceMode = workspaceMode;
+    if (workspaceMode === "sessionSidebar") {
+      const focusedPaneId = state.value.focusedPaneId;
+      for (const pane of state.value.panes) {
+        if (pane.id !== focusedPaneId && pane.threadId && !isPaneWorking(pane)) void releaseSidebarPane(pane, false);
+      }
+    } else if (state.value.focusedPaneId?.startsWith(SIDEBAR_PANE_PREFIX)) {
+      state.value.focusedPaneId = state.value.panes.find((pane) => !pane.id.startsWith(SIDEBAR_PANE_PREFIX))?.id ?? null;
+    }
     scheduleSave();
   };
 
@@ -1334,9 +1718,10 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     if (cwd) {
       if (pane.threadId) {
         await window.codexPane.request({ method: "thread/settings/update", params: { threadId: pane.threadId, cwd } });
+      } else {
+        pane.cwd = cwd;
+        scheduleSave();
       }
-      pane.cwd = cwd;
-      scheduleSave();
     }
   };
 
@@ -1417,6 +1802,24 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     }
   };
 
+  const searchWorkspaceFiles = async (pane: PaneState, query: string): Promise<Array<{ name: string; path: string; relativePath: string }>> => {
+    const root = pane.cwd || state.value.defaultCwd;
+    if (!root) return [];
+    const response = getRecord(await window.codexPane.request({ method: "fuzzyFileSearch", params: { query, roots: [root], cancellationToken: null } }));
+    const files = Array.isArray(response.files) ? response.files : [];
+    const separator = root.includes("\\") ? "\\" : "/";
+    return files.flatMap((rawFile) => {
+      const file = getRecord(rawFile);
+      const relativePath = getString(file.path)?.replaceAll(separator === "\\" ? "/" : "\\", separator);
+      if (!relativePath || relativePath.startsWith(separator) || /^[a-z]:/i.test(relativePath) || relativePath.split(/[\\/]/).includes("..")) return [];
+      return [{
+        name: getString(file.file_name) ?? relativePath.split(/[\\/]/).at(-1) ?? relativePath,
+        path: `${root.replace(/[\\/]+$/, "")}${separator}${relativePath}`,
+        relativePath
+      }];
+    }).slice(0, 20);
+  };
+
   const removeAttachment = (pane: PaneState, id: string): void => {
     pane.attachments = pane.attachments.filter((attachment) => attachment.id !== id);
     scheduleSave();
@@ -1429,6 +1832,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
 
   const clearUnread = (pane: PaneState): void => {
     pane.unread = false;
+    if (pane.threadId) clearSidebarUnread(pane.threadId);
   };
 
   const resolveRequest = async (request: PendingServerRequest, result?: unknown, error?: { code: number; message: string }): Promise<void> => {
@@ -1467,14 +1871,17 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     saveTimer = setTimeout(() => {
       // Main process replaces this snapshot with trusted BrowserWindow bounds.
       const windowState = { width: Math.max(800, window.innerWidth), height: Math.max(600, window.innerHeight), maximized: false };
+      const persistedPanes = state.value.panes.filter((pane) => !pane.id.startsWith(SIDEBAR_PANE_PREFIX)).slice(0, 6);
+      const persistedFocusedPaneId = persistedPanes.some((pane) => pane.id === state.value.focusedPaneId) ? state.value.focusedPaneId : persistedPanes[0]?.id ?? null;
       void window.codexPane.saveWorkspace({
         version: 1,
+        workspaceMode: state.value.workspaceMode,
         layout: state.value.layout,
         splitSizes: Object.fromEntries(Object.entries(state.value.splitSizes).map(([key, sizes]) => [key, [...sizes]])),
         defaultCwd: state.value.defaultCwd,
         appearance: { ...state.value.appearance },
-        focusedPaneId: state.value.focusedPaneId,
-        panes: state.value.panes.map(({ id, threadId, cwd, draft, attachments, references, model, effort, scrollTop, followTail }) => ({
+        focusedPaneId: persistedFocusedPaneId,
+        panes: persistedPanes.map(({ id, threadId, cwd, draft, attachments, references, model, effort, activePermissionProfile, approvalPolicy, approvalsReviewer, serviceTier, collaborationMode, scrollTop, followTail }) => ({
           id,
           threadId,
           cwd,
@@ -1483,6 +1890,11 @@ export const useWorkspaceStore = defineStore("workspace", () => {
           references: references.map((reference) => ({ ...reference })),
           model,
           effort,
+          activePermissionProfile,
+          approvalPolicy,
+          approvalsReviewer,
+          serviceTier,
+          collaborationMode,
           scrollTop,
           followTail
         })),
@@ -1508,6 +1920,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     newThread,
     resetPane,
     setLayout,
+    setWorkspaceMode,
     toggleFocus,
     setSplitSizes,
     updateAppearance,
@@ -1517,8 +1930,11 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     chooseAttachments,
     pasteAttachments,
     refreshSkills,
+    searchWorkspaceFiles,
     loadThreads,
     resumeThread,
+    switchSidebarThread,
+    newSidebarThread,
     loadOlderTurns,
     removeAttachment,
     removeReference,
@@ -1535,3 +1951,5 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     scheduleSave
   };
 });
+
+if (import.meta.hot) import.meta.hot.accept(acceptHMRUpdate(useWorkspaceStore, import.meta.hot));

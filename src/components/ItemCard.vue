@@ -2,7 +2,7 @@
 import { computed, ref, watch } from "vue";
 import { NAlert, NButton, NCard, NCode, NCollapse, NCollapseItem, NDescriptions, NDescriptionsItem, NIcon, NImage, NList, NListItem, NSpace, NTag, NText, NTooltip } from "naive-ui";
 import { CheckmarkCircleOutline, CopyOutline, EllipsisHorizontalCircleOutline, TerminalOutline } from "@vicons/ionicons5";
-import type { UiItem } from "../types";
+import type { ItemAction, UiItem } from "../types";
 import MarkdownContent from "./MarkdownContent.vue";
 
 type DetailField = { key: string; label: string; value: unknown };
@@ -11,12 +11,6 @@ type DiffLineKind = "add" | "delete" | "context" | "notice";
 type DiffLine = { content: string; kind: DiffLineKind; oldLine: number | null; newLine: number | null };
 type DiffHunk = { key: string; added: number; deleted: number; lines: DiffLine[] };
 type ParsedDiff = { added: number; deleted: number; hunks: DiffHunk[] };
-
-type ItemAction =
-  | { type: "switchAgent"; threadId: string }
-  | { type: "stopBackgroundProcess"; processId: string }
-  | { type: "stopAllBackgroundProcesses" }
-  | { type: "switchPermissionProfile"; profileId: string };
 
 const props = withDefaults(defineProps<{ item: UiItem; unwrapPowerShell?: boolean; commandShellPath?: string; mcpGatewayAdaptation?: boolean }>(), { unwrapPowerShell: false, commandShellPath: "", mcpGatewayAdaptation: false });
 const emit = defineEmits<{ action: [action: ItemAction] }>();
@@ -147,9 +141,9 @@ const displayText = computed(() => {
     return content.map((entry) => {
       const value = asRecord(entry);
       if (value.type === "text" && typeof value.text === "string") return value.text;
-      if (value.type === "localImage") return "[本地图片]";
-      if (value.type === "image") return "[远程图片]";
-      if (value.type === "mention") return `[文件] ${textValue(value.name)}`;
+      if (value.type === "localImage") return textValue(value.path);
+      if (value.type === "image") return textValue(value.url);
+      if (value.type === "mention") return textValue(value.path ?? value.name);
       return "";
     }).filter(Boolean).join("\n");
   }
@@ -171,7 +165,7 @@ const reviewText = computed(() => textValue(firstValue("review", "summary", "mes
 const title = computed(() => ({
   reasoning: "思考摘要", commandExecution: "命令执行", fileChange: "文件变更", mcpToolCall: "MCP 工具", dynamicToolCall: "工具调用",
   collabAgentToolCall: "协作代理", subAgentActivity: "代理活动", agents: "协作代理", backgroundProcesses: "后台进程", webSearch: "网络搜索", imageView: "查看图片", imageGeneration: "生成图片",
-  enteredReviewMode: "开始审查", exitedReviewMode: "审查完成", contextCompaction: "上下文已压缩", plan: "计划", status: "当前状态", mcpStatus: "MCP 状态", skills: "可用技能"
+  enteredReviewMode: "开始审查", exitedReviewMode: "审查完成", contextCompaction: "上下文压缩", plan: "计划", status: "当前状态", mcpStatus: "MCP 状态", skills: "可用技能"
 }[props.item.type] ?? "运行详情"));
 const statusLabel = computed(() => {
   const status = String(record.value.status ?? props.item.status);
@@ -187,6 +181,15 @@ const stripMatchingOuterQuotes = (value: string): string => {
     const quote = result[0];
     if ((quote !== '"' && quote !== "'") || result.at(-1) !== quote) break;
     result = result.slice(1, -1).trim();
+  }
+  return result;
+};
+const stripEscapedOuterQuotes = (value: string): string => {
+  let result = stripMatchingOuterQuotes(value);
+  for (let depth = 0; depth < 2; depth += 1) {
+    const match = result.match(/^\\(["'])([\s\S]*)\\\1$/);
+    if (!match) break;
+    result = stripMatchingOuterQuotes(match[2] ?? "");
   }
   return result;
 };
@@ -212,7 +215,7 @@ const unwrapPowerShellCommand = (value: string): string => {
   const argumentsText = invocation.slice(executableEnd);
   const commandMarker = argumentsText.match(/\s+(?:(['"])-command\1|-command)\s+/i) ?? argumentsText.match(/\s+(?:(['"])-c\1|-c)\s+/i);
   if (!commandMarker || commandMarker.index === undefined) return value;
-  return stripMatchingOuterQuotes(argumentsText.slice(commandMarker.index + commandMarker[0].length));
+  return stripEscapedOuterQuotes(argumentsText.slice(commandMarker.index + commandMarker[0].length));
 };
 const commandText = computed(() => {
   const value = firstValue("command", "commandLine");
@@ -313,7 +316,32 @@ const skillEntries = computed<Record<string, unknown>[]>(() => {
 });
 const agentEntries = computed<Record<string, unknown>[]>(() => collectionRecords("agents", "data", "items").map((entry) => ({ ...entry, threadId: entry.threadId ?? entry.id })));
 const backgroundProcessEntries = computed(() => collectionRecords("processes", "data", "items"));
-const permissionProfiles = computed(() => collectionRecords("profiles"));
+const permissionModes = computed(() => collectionRecords("modes"));
+const settingChanges = computed(() => collectionRecords("changes"));
+const goalStateLabel = computed(() => ({
+  active: "生效",
+  paused: "已暂停",
+  resumed: "继续",
+  empty: "暂无",
+  blocked: "受阻",
+  usageLimited: "用量受限",
+  budgetLimited: "预算受限",
+  complete: "已完成"
+} as Record<string, string>)[String(record.value.state)] ?? textValue(record.value.state));
+const permissionModeIsCurrent = (mode: Record<string, unknown>): boolean => mode.profileId === record.value.currentProfile
+  && mode.approvalPolicy === record.value.currentApprovalPolicy
+  && mode.approvalsReviewer === record.value.currentApprovalsReviewer;
+const switchPermissionMode = (mode: Record<string, unknown>): void => {
+  const approvalPolicy = String(mode.approvalPolicy);
+  const approvalsReviewer = String(mode.approvalsReviewer);
+  if (!["untrusted", "on-request", "never"].includes(approvalPolicy) || !["user", "auto_review", "guardian_subagent"].includes(approvalsReviewer)) return;
+  emit("action", {
+    type: "switchPermissionMode",
+    profileId: String(mode.profileId),
+    approvalPolicy: approvalPolicy as "untrusted" | "on-request" | "never",
+    approvalsReviewer: approvalsReviewer as "user" | "auto_review" | "guardian_subagent"
+  });
+};
 const entryStatus = (entry: Record<string, unknown>): string | null => {
   if (entry.status !== undefined) return textValue(entry.status);
   if (entry.authStatus !== undefined) return ({ unsupported: "无需认证", notLoggedIn: "未登录", bearerToken: "令牌认证", oAuth: "OAuth 已连接", unknown: "认证状态未知" }[String(entry.authStatus)] ?? textValue(entry.authStatus));
@@ -429,12 +457,29 @@ const copyText = async (value: string): Promise<void> => {
   </template>
 
   <NCard v-else-if="item.type === 'status'" size="small" class="tool-card item-card" :content-style="compactContentStyle" :header-style="compactHeaderStyle" title="当前状态">
-    <NDescriptions :column="2" size="small" label-placement="left"><NDescriptionsItem v-for="field in statusFields" :key="field.key" :label="field.label">{{ shortenedText(field.value, 500) }}</NDescriptionsItem></NDescriptions>
+    <div class="inline-detail-fields"><span v-for="field in statusFields" :key="field.key" class="inline-detail-field"><NText depth="3">{{ field.label }}：</NText><span>{{ shortenedText(field.value, 500) }}</span></span></div>
   </NCard>
 
   <NCard v-else-if="item.type === 'permissions'" size="small" class="tool-card item-card" :content-style="compactContentStyle" :header-style="compactHeaderStyle" title="权限模式">
-    <NList v-if="permissionProfiles.length" size="small" :show-divider="false"><NListItem v-for="profile in permissionProfiles" :key="String(profile.id)"><NSpace justify="space-between" align="center" :wrap="false"><span><NText strong>{{ textValue(profile.id) }}</NText><NText v-if="profile.description" depth="3"> · {{ textValue(profile.description) }}</NText></span><NButton size="tiny" :type="record.currentProfile === profile.id ? 'primary' : 'default'" :secondary="record.currentProfile !== profile.id" :disabled="record.currentProfile === profile.id" @click="emit('action', { type: 'switchPermissionProfile', profileId: String(profile.id) })">{{ record.currentProfile === profile.id ? "当前" : "切换" }}</NButton></NSpace></NListItem></NList>
+    <template #header-extra><NButton quaternary circle size="small" aria-label="关闭权限选择" @click="emit('action', { type: 'dismissItem', itemId: item.id })">×</NButton></template>
+    <NList v-if="permissionModes.length" size="small" :show-divider="false"><NListItem v-for="mode in permissionModes" :key="String(mode.id)"><NSpace justify="space-between" align="center" :wrap="false"><span><NText strong>{{ textValue(mode.label) }}</NText><NText v-if="mode.description" depth="3"> · {{ textValue(mode.description) }}</NText></span><NButton size="small" :type="permissionModeIsCurrent(mode) ? 'primary' : 'default'" :secondary="!permissionModeIsCurrent(mode)" :disabled="permissionModeIsCurrent(mode)" @click="switchPermissionMode(mode)">{{ permissionModeIsCurrent(mode) ? "当前" : "切换" }}</NButton></NSpace></NListItem></NList>
     <NText v-else depth="3">暂无可用权限模式</NText>
+  </NCard>
+
+  <NCard v-else-if="item.type === 'threadSettingsChanged'" size="small" class="tool-card item-card" :content-style="compactContentStyle" :header-style="compactHeaderStyle" title="会话设置">
+    <div class="inline-detail-fields"><span v-for="(change, index) in settingChanges" :key="`${String(change.label)}-${index}`" class="inline-detail-field"><NText depth="3">{{ textValue(change.label) }}：</NText><span>{{ textValue(change.value) }}</span></span></div>
+  </NCard>
+
+  <NCard v-else-if="item.type === 'goalStatus'" size="small" class="tool-card item-card" :content-style="compactContentStyle" :header-style="compactHeaderStyle" title="目标">
+    <NSpace vertical size="small"><NText strong>{{ goalStateLabel }}</NText><NText v-if="record.objective && record.state === 'active'">{{ textValue(record.objective) }}</NText></NSpace>
+  </NCard>
+
+  <NCard v-else-if="item.type === 'modeStatus'" size="small" class="tool-card item-card" :content-style="compactContentStyle" :header-style="compactHeaderStyle" title="模式切换">
+    <NText>{{ textValue(record.mode) }}</NText>
+  </NCard>
+
+  <NCard v-else-if="item.type === 'contextCompaction'" size="small" class="tool-card item-card" :header-style="compactHeaderStyle" title="上下文压缩">
+    <template #header-extra><NTag size="small" :type="statusType">{{ statusLabel }}</NTag></template>
   </NCard>
 
   <NCard v-else-if="item.type === 'mcpStatus' || item.type === 'skills'" size="small" class="tool-card item-card" :content-style="compactContentStyle" :header-style="compactHeaderStyle" :title="title">
@@ -448,7 +493,7 @@ const copyText = async (value: string): Promise<void> => {
   <NCard v-else-if="item.type === 'commandExecution'" size="small" class="tool-card item-card" :content-style="compactContentStyle" :header-style="compactHeaderStyle">
     <template #header><span class="card-title"><NIcon :component="TerminalOutline" /> {{ commandStateLabel }} command</span></template><template #header-extra><NTag size="small" :type="statusType">{{ statusLabel }}</NTag></template>
     <NCode v-if="commandText !== '—'" :code="commandText" language="powershell" word-wrap />
-    <NDescriptions :column="3" size="small" label-placement="left"><NDescriptionsItem v-if="record.cwd" label="目录">{{ textValue(record.cwd) }}</NDescriptionsItem><NDescriptionsItem v-if="record.exitCode !== undefined" label="退出码">{{ record.exitCode }}</NDescriptionsItem><NDescriptionsItem v-if="durationLabel" label="耗时">{{ durationLabel }}</NDescriptionsItem></NDescriptions>
+    <div class="inline-detail-fields"><span v-if="record.cwd" class="inline-detail-field"><NText depth="3">目录：</NText><span>{{ textValue(record.cwd) }}</span></span><span v-if="record.exitCode !== undefined" class="inline-detail-field"><NText depth="3">退出码：</NText><span>{{ record.exitCode }}</span></span><span v-if="durationLabel" class="inline-detail-field"><NText depth="3">耗时：</NText><span>{{ durationLabel }}</span></span></div>
     <NCollapse v-if="commandOutput"><NCollapseItem title="输出" name="output"><pre class="long-output">{{ shortenedText(commandOutput) }}</pre><NButton v-if="commandOutput.length > 12000" text type="primary" @click="copyText(commandOutput)">复制完整输出</NButton></NCollapseItem></NCollapse>
   </NCard>
 
@@ -485,13 +530,13 @@ const copyText = async (value: string): Promise<void> => {
 
   <NCard v-else-if="item.type === 'mcpToolCall'" size="small" class="tool-card item-card" :content-style="compactContentStyle" :header-style="compactHeaderStyle" title="MCP 工具">
     <template #header-extra><NTag size="small" :type="statusType">{{ statusLabel }}</NTag></template>
-    <NDescriptions :column="3" size="small" label-placement="left"><NDescriptionsItem v-if="record.server || record.serverName" label="服务">{{ mcpServiceLabel }}</NDescriptionsItem><NDescriptionsItem label="工具">{{ mcpToolLabel }}</NDescriptionsItem><NDescriptionsItem v-if="durationLabel" label="耗时">{{ durationLabel }}</NDescriptionsItem><NDescriptionsItem v-if="record.readOnlyHint !== null && record.readOnlyHint !== undefined" label="只读">{{ record.readOnlyHint ? "是" : "否" }}</NDescriptionsItem></NDescriptions>
+    <div class="inline-detail-fields"><span v-if="record.server || record.serverName" class="inline-detail-field"><NText depth="3">服务：</NText><span>{{ mcpServiceLabel }}</span></span><span class="inline-detail-field"><NText depth="3">工具：</NText><span>{{ mcpToolLabel }}</span></span><span v-if="durationLabel" class="inline-detail-field"><NText depth="3">耗时：</NText><span>{{ durationLabel }}</span></span><span v-if="record.readOnlyHint !== null && record.readOnlyHint !== undefined" class="inline-detail-field"><NText depth="3">只读：</NText><span>{{ record.readOnlyHint ? "是" : "否" }}</span></span></div>
     <NCollapse v-if="mcpArguments !== undefined || mcpContent.length || record.error"><NCollapseItem title="参数与内容" name="details"><NDescriptions :column="1" size="small" label-placement="left"><NDescriptionsItem v-if="mcpArguments !== undefined" label="参数"><pre class="long-output">{{ shortenedText(mcpArguments) }}</pre></NDescriptionsItem><NDescriptionsItem v-for="block in mcpContent" :key="block.key" label="内容"><pre class="long-output">{{ shortenedText(block.text) }}</pre></NDescriptionsItem><NDescriptionsItem v-if="record.error" label="错误"><pre class="long-output">{{ shortenedText(record.error) }}</pre></NDescriptionsItem></NDescriptions></NCollapseItem></NCollapse>
   </NCard>
 
   <NCard v-else-if="item.type === 'dynamicToolCall'" size="small" class="tool-card item-card" :content-style="compactContentStyle" :header-style="compactHeaderStyle" title="工具调用">
     <template #header-extra><NTag size="small" :type="statusType">{{ statusLabel }}</NTag></template>
-    <NDescriptions :column="2" size="small" label-placement="left"><NDescriptionsItem label="工具">{{ toolName }}</NDescriptionsItem><NDescriptionsItem v-if="durationLabel" label="耗时">{{ durationLabel }}</NDescriptionsItem></NDescriptions>
+    <div class="inline-detail-fields"><span class="inline-detail-field"><NText depth="3">工具：</NText><span>{{ toolName }}</span></span><span v-if="durationLabel" class="inline-detail-field"><NText depth="3">耗时：</NText><span>{{ durationLabel }}</span></span></div>
     <NCollapse v-if="toolDetailFields.length"><NCollapseItem title="参数与结果" name="details"><NDescriptions :column="1" size="small" label-placement="left"><NDescriptionsItem v-for="field in toolDetailFields" :key="field.key" :label="field.label"><pre class="long-output">{{ shortenedText(field.value) }}</pre></NDescriptionsItem></NDescriptions></NCollapseItem></NCollapse>
   </NCard>
 

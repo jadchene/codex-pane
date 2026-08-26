@@ -2,31 +2,42 @@
 
 English | [简体中文](README.zh-CN.md)
 
-## What This Project Is
+Codex Pane is a Windows 11 desktop workbench for local Codex sessions. It uses the Codex CLI already installed on your computer.
 
-Codex Pane is a Windows 11 desktop workbench for using multiple local Codex conversations in one window. It uses the Codex CLI already installed on your computer.
+## Screenshots
 
-## Why Use It
+### Multi-Pane
 
-- Work with up to six conversations at once.
-- Give each pane its own conversation and working directory.
-- View replies, commands, file changes, tool calls, approvals, and images clearly.
+Run several independent sessions in one window. Each pane has its own session, working directory, model, reasoning effort, and permission state.
+
+![Multi-pane workspace](docs/screenshots/multi-pane.png)
+
+### Session Sidebar
+
+Focus on one session while browsing, searching, and switching sessions from the sidebar.
+
+![Session sidebar](docs/screenshots/session-sidebar.png)
+
+Switch modes at any time in Settings.
 
 ## Quick Start
 
-1. Make sure `codex` works in PowerShell.
-2. Download and open the `win-unpacked` directory.
+1. Make sure `codex` works in PowerShell 7.
+2. Open the `win-unpacked` directory.
 3. Run `Codex Pane.exe` and choose a default working directory.
 
-## Reference
+## Features
 
-Codex Pane supports multiple layouts, session creation and recovery, per-pane working directories, model and reasoning selection, permission switching, Skills, attachments, command and diff display, MCP calls, approvals, process status, and usage status.
+- Create, resume, rename, and switch sessions.
+- Set a global default working directory or a separate directory for each pane.
+- View replies, commands, diffs, tool calls, approvals, images, subagents, and background tasks.
+- Use `/` for commands, `@` for Skills, and `$` for workspace files.
+- Attach local files and images, or paste images directly.
+- Switch models, reasoning effort, and permission modes from the composer.
 
-Available commands: `/agents`, `/compact`, `/cwd`, `/kill-processes`, `/mcp`, `/new`, `/permissions`, `/processes`, `/resume`, `/review`, `/skills`, and `/status`.
+Commands: `/agents`, `/cd`, `/compact`, `/fast`, `/goal`, `/mcp`, `/new`, `/permissions`, `/plan`, `/ps`, `/rename`, `/resume`, `/review`, `/skills`, `/status`, `/stop`.
 
-Settings include theme, interface font, font size, accent color, default working directory, PowerShell 7 path, and MCP Gateway adaptation.
-
-Application data is stored in the `data` directory beside the application when possible.
+Application data is stored in the `data` directory beside the application.
 
 ## Development
 

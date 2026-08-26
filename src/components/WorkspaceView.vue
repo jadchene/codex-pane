@@ -1,15 +1,22 @@
 <script setup lang="ts">
-import { nextTick, ref } from "vue";
+import { computed, nextTick, ref } from "vue";
 import type { ComponentPublicInstance } from "vue";
 import { Pane, Splitpanes } from "splitpanes";
 import "splitpanes/dist/splitpanes.css";
 import { useWorkspaceStore } from "../stores/workspace";
 import PaneHost from "./PaneHost.vue";
+import SessionSidebar from "./SessionSidebar.vue";
 
 const emit = defineEmits<{ openSessions: [paneId: string] }>();
 const store = useWorkspaceStore();
 type PaneHostInstance = ComponentPublicInstance & { focusComposer: () => void };
 const paneHosts = ref<Record<number, PaneHostInstance | null>>({});
+const sessionSidebar = ref<InstanceType<typeof SessionSidebar> | null>(null);
+const sessionPaneIndex = computed(() => {
+  const index = store.state.panes.findIndex((pane) => pane.id === store.state.focusedPaneId);
+  return index >= 0 ? index : 0;
+});
+const sessionPane = computed(() => store.state.panes[sessionPaneIndex.value]!);
 
 const size = (key: string, index: number, count = 2): number => store.state.splitSizes[key]?.[index] ?? 100 / count;
 const captureSizes = (key: string, payload: { panes: Array<{ size: number }> }): void => store.setSplitSizes(key, payload.panes.map((pane) => pane.size));
@@ -29,6 +36,7 @@ const focusPaneById = async (paneId: string | null): Promise<void> => {
   if (index >= 0) await focusPane(index);
 };
 const moveFocus = (event: KeyboardEvent): void => {
+  if (store.state.workspaceMode === "sessionSidebar") return;
   if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || !["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
   const layout = store.state.layout;
   const dimensions = layout === "single" ? { columns: 1, rows: 1 }
@@ -47,12 +55,20 @@ const moveFocus = (event: KeyboardEvent): void => {
   event.preventDefault();
   void focusPane(nextRow * dimensions.columns + nextColumn);
 };
-defineExpose({ focusPaneById });
+const focusSessionList = (): void => sessionSidebar.value?.focusSearch();
+defineExpose({ focusPaneById, focusSessionList });
 </script>
 
 <template>
-  <main class="workspace" :class="`workspace-layout-${store.state.layout}`" @keydown="moveFocus">
-    <PaneHost v-if="store.state.layout === 'single'" :ref="instance => setPaneHost(0, instance)" :index="0" @open-sessions="emit('openSessions', $event)" />
+  <main class="workspace" :class="[`workspace-layout-${store.state.layout}`, `workspace-mode-${store.state.workspaceMode}`]" @keydown="moveFocus">
+    <div v-if="store.state.workspaceMode === 'sessionSidebar'" class="session-workspace">
+      <SessionSidebar ref="sessionSidebar" :pane="sessionPane" @activate-pane="focusPaneById" />
+      <div class="session-workspace-pane">
+        <PaneHost :ref="instance => setPaneHost(sessionPaneIndex, instance)" :index="sessionPaneIndex" include-global-requests @open-sessions="emit('openSessions', $event)" />
+      </div>
+    </div>
+
+    <PaneHost v-else-if="store.state.layout === 'single'" :ref="instance => setPaneHost(0, instance)" :index="0" @open-sessions="emit('openSessions', $event)" />
 
     <Splitpanes v-else-if="store.state.layout === 'vertical'" class="codex-split" @resized="captureSizes('vertical', $event)">
       <Pane :size="size('vertical', 0)"><PaneHost :ref="instance => setPaneHost(0, instance)" :index="0" @open-sessions="emit('openSessions', $event)" /></Pane>

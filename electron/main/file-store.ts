@@ -26,7 +26,7 @@ export class FileStore {
     const name = basename(normalizedPath);
     const destination = this.resolveAttachment(id, name);
     await copyFile(normalizedPath, destination);
-    return { id, name, path: `codex-file://files/${id}`, managed: true };
+    return { id, name, path: destination, managed: true };
   }
 
   resolveAttachment(id: string, name: string): string {

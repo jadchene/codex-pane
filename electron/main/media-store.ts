@@ -90,8 +90,9 @@ export class MediaStore {
     }
     await mkdir(this.#directory, { recursive: true });
     const id = randomUUID();
-    await writeFile(join(this.#directory, `${id}.png`), bytes, { flag: "wx" });
-    return { id, name, url: `codex-media://media/${id}`, size: bytes.byteLength, kind: "local" };
+    const sourcePath = join(this.#directory, `${id}.png`);
+    await writeFile(sourcePath, bytes, { flag: "wx" });
+    return { id, name, url: `codex-media://media/${id}`, size: bytes.byteLength, kind: "local", sourcePath };
   }
 
   #validateDimensions(size: Electron.Size): void {

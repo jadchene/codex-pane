@@ -1,6 +1,7 @@
 import type { ConnectionState, FileReference, MediaAttachment } from "../electron/shared/contracts";
 
 export type LayoutKind = "single" | "vertical" | "horizontal" | "quad" | "fourColumns" | "fourRows" | "six";
+export type WorkspaceMode = "panes" | "sessionSidebar";
 export type ThemeMode = "dark" | "light";
 
 export type AppearanceSettings = {
@@ -76,6 +77,11 @@ export type PaneState = {
   references: FileReference[];
   skills: SkillOption[];
   activePermissionProfile: string | null;
+  approvalPolicy?: "untrusted" | "on-request" | "never" | null;
+  approvalsReviewer?: "user" | "auto_review" | "guardian_subagent" | null;
+  serviceTier?: string | null;
+  collaborationMode?: "default" | "plan" | null;
+  goal?: Record<string, unknown> | null;
   model: string | null;
   effort: string | null;
   activeTurnId: string | null;
@@ -97,6 +103,13 @@ export type PaneState = {
   historyLoading?: boolean;
 };
 
+export type ItemAction =
+  | { type: "switchAgent"; threadId: string }
+  | { type: "stopBackgroundProcess"; processId: string }
+  | { type: "stopAllBackgroundProcesses" }
+  | { type: "switchPermissionMode"; profileId: string; approvalPolicy: "untrusted" | "on-request" | "never"; approvalsReviewer: "user" | "auto_review" | "guardian_subagent" }
+  | { type: "dismissItem"; itemId: string };
+
 export type PendingServerRequest = {
   generation: number;
   id: string | number;
@@ -112,6 +125,7 @@ export type ModelOption = {
   efforts: string[];
   inputModalities: string[];
   defaultEffort: string | null;
+  serviceTiers: Array<{ id: string; name: string; description: string }>;
   isDefault: boolean;
 };
 
@@ -132,6 +146,7 @@ export type ThreadSummary = {
 
 export type AppState = {
   connection: ConnectionState;
+  workspaceMode: WorkspaceMode;
   layout: LayoutKind;
   splitSizes: Record<string, number[]>;
   defaultCwd: string;
@@ -157,6 +172,7 @@ export type AppState = {
   } | null;
   permissionProfiles: Array<{ id: string; description: string | null; allowed: boolean }>;
   threads: ThreadSummary[];
+  sidebarUnreadThreadIds: string[];
   notices: string[];
   initialized: boolean;
 };

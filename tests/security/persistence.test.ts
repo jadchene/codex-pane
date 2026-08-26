@@ -16,11 +16,14 @@ describe("workspace persistence validation", () => {
     expect(workspaceStateSchema.parse(validState)).toMatchObject(validState);
     expect(workspaceStateSchema.parse({ ...validState, layout: "fourColumns", splitSizes: { fourColumns: [25, 25, 25, 25] } }).layout).toBe("fourColumns");
     expect(workspaceStateSchema.parse({ ...validState, layout: "fourRows", splitSizes: { fourRows: [25, 25, 25, 25] } }).layout).toBe("fourRows");
+    expect(workspaceStateSchema.parse({ ...validState, workspaceMode: "sessionSidebar" }).workspaceMode).toBe("sessionSidebar");
+    expect(() => workspaceStateSchema.parse({ ...validState, workspaceMode: "unknown" })).toThrow();
   });
 
   it("loads workspaces saved before the global default directory was added", () => {
     const { defaultCwd: _defaultCwd, ...legacyState } = validState;
     expect(workspaceStateSchema.parse(legacyState).defaultCwd).toBe("");
+    expect(workspaceStateSchema.parse(legacyState).workspaceMode).toBe("panes");
     expect(workspaceStateSchema.parse(legacyState).appearance).toEqual({
       theme: "dark",
       fontFamily: '"Segoe UI", "Microsoft YaHei UI", sans-serif',
@@ -48,6 +51,22 @@ describe("workspace persistence validation", () => {
     const reference = { id: crypto.randomUUID(), name: "notes.txt", path: "codex-file://files/test", managed: true };
     expect(workspaceStateSchema.parse({ ...validState, panes: [{ ...validState.panes[0], references: [reference] }] }).panes[0]!.references).toEqual([reference]);
     expect(() => workspaceStateSchema.parse({ ...validState, panes: [{ ...validState.panes[0], references: [{ ...reference, path: "" }] }] })).toThrow();
+  });
+
+  it("persists bounded thread mode state used by the status line", () => {
+    const parsed = workspaceStateSchema.parse({
+      ...validState,
+      panes: [{
+        ...validState.panes[0],
+        activePermissionProfile: ":workspace",
+        approvalPolicy: "on-request",
+        approvalsReviewer: "auto_review",
+        serviceTier: "priority",
+        collaborationMode: "plan"
+      }]
+    });
+    expect(parsed.panes[0]).toMatchObject({ activePermissionProfile: ":workspace", approvalsReviewer: "auto_review", collaborationMode: "plan" });
+    expect(() => workspaceStateSchema.parse({ ...validState, panes: [{ ...validState.panes[0], approvalsReviewer: "renderer" }] })).toThrow();
   });
 
   it("rejects duplicate and missing focused pane identities", () => {

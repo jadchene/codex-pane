@@ -57,6 +57,35 @@ describe("ItemCard compact structured views", () => {
     expect(noAuth.text()).not.toContain("unsupported");
   });
 
+  it("renders protocol settings updates inside the conversation", () => {
+    const wrapper = mount(ItemCard, { props: { item: item("threadSettingsChanged", { changes: [
+      { label: "权限模式", value: "自动审批" },
+      { label: "协作模式", value: "计划模式" }
+    ] }) } });
+    expect(wrapper.text()).toContain("会话设置");
+    expect(wrapper.get(".inline-detail-fields").text()).toContain("权限模式：自动审批");
+    expect(wrapper.get(".inline-detail-fields").text()).toContain("协作模式：计划模式");
+  });
+
+  it("renders readable goal states without exposing protocol JSON", () => {
+    const active = mount(ItemCard, { props: { item: item("goalStatus", { state: "active", objective: "完成协议适配" }) } });
+    expect(active.text()).toContain("目标");
+    expect(active.text()).toContain("生效");
+    expect(active.text()).toContain("完成协议适配");
+    expect(active.text()).not.toContain("objective");
+    expect(mount(ItemCard, { props: { item: item("goalStatus", { state: "empty" }) } }).text()).toContain("暂无");
+    expect(mount(ItemCard, { props: { item: item("goalStatus", { state: "paused", objective: "完成协议适配" }) } }).text()).toContain("已暂停");
+    expect(mount(ItemCard, { props: { item: item("goalStatus", { state: "resumed", objective: "完成协议适配" }) } }).text()).toContain("继续");
+  });
+
+  it("renders context compaction as a title-only card", () => {
+    const wrapper = mount(ItemCard, { props: { item: item("contextCompaction", { encryptedContent: "internal-compaction-details", tokenCount: 42_000 }) } });
+    expect(wrapper.text()).toContain("上下文压缩");
+    expect(wrapper.text()).toContain("已完成");
+    expect(wrapper.text()).not.toContain("internal-compaction-details");
+    expect(wrapper.find(".n-card__content").exists()).toBe(false);
+  });
+
   it("shows command lifecycle and unwraps PowerShell display shells", () => {
     const command = mount(ItemCard, { props: { item: item("commandExecution", { id: "raw-id", command: "Get-ChildItem", cwd: "E:\\Work", exitCode: 0, aggregatedOutput: "ok", internalEnvelope: "must-not-render" }) } });
     expect(command.text()).toContain("Ran command");
@@ -75,8 +104,13 @@ describe("ItemCard compact structured views", () => {
     const legacyPowerShell = mount(ItemCard, { props: { item: item("commandExecution", { command: '"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "& \'script.ps1\'"' }) } });
     expect(legacyPowerShell.text()).toContain("& 'script.ps1'");
     expect(legacyPowerShell.text()).not.toContain("powershell.exe");
+    const escapedInnerQuotes = mount(ItemCard, { props: { item: item("commandExecution", { command: `pwsh.exe -Command '\\"Get-Location\\"'` }) } });
+    expect(escapedInnerQuotes.text()).toContain("Get-Location");
+    expect(escapedInnerQuotes.text()).not.toContain('\\"Get-Location\\"');
     const direct = mount(ItemCard, { props: { item: item("commandExecution", { command: "Get-ChildItem -Force" }) } });
     expect(direct.text()).toContain("Get-ChildItem -Force");
+    expect(command.get(".inline-detail-fields").text()).toContain("目录：E:\\Work");
+    expect(command.get(".inline-detail-fields").text()).toContain("退出码：0");
   });
 
   it("shows automatic approval status, risk, rationale, and action", () => {
@@ -181,11 +215,16 @@ describe("ItemCard compact structured views", () => {
     const status = mount(ItemCard, { props: { item: item("status", { contextTokens: "56,000/100,000" }) } });
     expect(status.text()).toContain("上下文");
     expect(status.text()).not.toContain("上下文 Token");
-    const permissions = mount(ItemCard, { props: { item: item("permissions", { currentProfile: ":workspace", profiles: [{ id: ":workspace", description: "工作区", allowed: true }, { id: ":full", description: "完整访问", allowed: true }] }) } });
+    const permissions = mount(ItemCard, { props: { item: item("permissions", { currentProfile: ":workspace", currentApprovalPolicy: "on-request", currentApprovalsReviewer: "user", modes: [
+      { id: "ask", label: "请求审批", description: "需要确认", profileId: ":workspace", approvalPolicy: "on-request", approvalsReviewer: "user" },
+      { id: "full", label: "完全访问", description: "不再询问", profileId: ":full", approvalPolicy: "never", approvalsReviewer: "user" }
+    ] }) } });
     expect(permissions.text()).toContain("权限模式");
     expect(permissions.text()).toContain("当前");
     await permissions.findAll("button").find((button) => button.text() === "切换")!.trigger("click");
-    expect(permissions.emitted("action")?.at(-1)).toEqual([{ type: "switchPermissionProfile", profileId: ":full" }]);
+    expect(permissions.emitted("action")?.at(-1)).toEqual([{ type: "switchPermissionMode", profileId: ":full", approvalPolicy: "never", approvalsReviewer: "user" }]);
+    await permissions.get('button[aria-label="关闭权限选择"]').trigger("click");
+    expect(permissions.emitted("action")?.at(-1)).toEqual([{ type: "dismissItem", itemId: "item-1" }]);
   });
 
   it("shows open-page URLs even when a web item has no result list", () => {
@@ -211,10 +250,13 @@ describe("ItemCard compact structured views", () => {
     ]);
   });
 
-  it("labels user images and renders generated or imported images", async () => {
-    const user = mount(ItemCard, { props: { item: item("userMessage", { content: [{ type: "localImage", path: "C:\\image.png" }, { type: "image", url: "https://example.com/image.png" }] }) } });
-    expect(user.text()).toContain("[本地图片]");
-    expect(user.text()).toContain("[远程图片]");
+  it("shows user attachment paths and renders generated or imported images", async () => {
+    const user = mount(ItemCard, { props: { item: item("userMessage", { content: [{ type: "localImage", path: "C:\\image.png" }, { type: "image", url: "https://example.com/image.png" }, { type: "mention", name: "README.md", path: "E:\\Work\\README.md" }] }) } });
+    expect(user.text()).toContain("C:\\image.png");
+    expect(user.text()).toContain("https://example.com/image.png");
+    expect(user.text()).toContain("E:\\Work\\README.md");
+    expect(user.text()).not.toContain("[本地图片]");
+    expect(user.text()).not.toContain("[文件]");
     const generated = mount(ItemCard, { props: { item: item("imageGeneration", { result: "cG5n" }) } });
     expect(generated.get("img").attributes("src")).toBe("data:image/png;base64,cG5n");
     const importImagePath = vi.fn().mockResolvedValue({ url: "codex-media://media/test" });

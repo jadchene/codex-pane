@@ -16,6 +16,7 @@ const connection = (phase: ConnectionState["phase"], generation = 1): Connection
 
 const workspaceWithThread = (threadId: string): WorkspaceState => ({
   version: 1,
+  workspaceMode: "panes",
   layout: "quad",
   splitSizes: {},
   defaultCwd: "",
@@ -176,6 +177,27 @@ describe("workspace state machine", () => {
     });
   });
 
+  it("keeps a newly created live session visible while the persisted thread list catches up", async () => {
+    const api = installApi(Promise.resolve({ connection: connection("ready"), workspace: null }));
+    api.request.mockImplementation(async (requestValue: { method: string }) => {
+      if (requestValue.method === "model/list") return { data: [] };
+      if (requestValue.method === "account/read") return { account: null };
+      if (requestValue.method === "account/rateLimits/read") return {};
+      if (requestValue.method === "thread/list") return { data: [] };
+      return {};
+    });
+    const store = useWorkspaceStore();
+    await store.initialize();
+    const pane = store.state.panes[0]!;
+    pane.threadId = "thread-new-live";
+    pane.title = "刚发送的第一句话";
+    pane.cwd = "E:\\Work";
+
+    await store.loadThreads("", "E:\\Work");
+
+    expect(store.state.threads).toEqual([expect.objectContaining({ id: "thread-new-live", name: "刚发送的第一句话" })]);
+  });
+
   it("recognizes a successful account response that explicitly does not require OpenAI auth", async () => {
     const api = installApi(Promise.resolve({ connection: connection("ready"), workspace: null }));
     api.request.mockImplementation(async (requestValue: { method: string }) => {
@@ -213,8 +235,8 @@ describe("workspace state machine", () => {
     await store.initialize();
     const pane = store.state.panes[0]!;
     vi.mocked(window.codexPane.chooseAttachments).mockResolvedValueOnce({
-      images: [{ id: "image-1", name: "one.png", url: "codex-media://media/image-1", size: 1, kind: "local" }],
-      files: [{ id: "11111111-1111-4111-8111-111111111111", name: "notes.txt", path: "codex-file://files/11111111-1111-4111-8111-111111111111", managed: true }]
+      images: [{ id: "image-1", name: "one.png", url: "codex-media://media/image-1", size: 1, kind: "local", sourcePath: "E:\\Data\\image-1.png" }],
+      files: [{ id: "11111111-1111-4111-8111-111111111111", name: "notes.txt", path: "E:\\Data\\11111111-1111-4111-8111-111111111111.txt", managed: true }]
     });
     await store.chooseAttachments(pane);
     expect(window.codexPane.chooseAttachments).toHaveBeenCalledWith(20);
@@ -254,23 +276,112 @@ describe("workspace state machine", () => {
     expect(pane.activePermissionProfile).toBe(":workspace");
   });
 
+  it("searches file references relative to the pane working directory", async () => {
+    const api = installApi(Promise.resolve({ connection: connection("ready"), workspace: null }));
+    api.request.mockImplementation(async (requestValue: { method: string }) => {
+      if (requestValue.method === "model/list") return { data: [] };
+      if (requestValue.method === "account/read") return { account: null };
+      if (requestValue.method === "account/rateLimits/read") return {};
+      if (requestValue.method === "fuzzyFileSearch") return { files: [{ root: "E:\\Work", path: "docs/guide.md", file_name: "guide.md", match_type: "file", score: 80, indices: [5] }] };
+      return {};
+    });
+    const store = useWorkspaceStore();
+    await store.initialize();
+    const pane = store.state.panes[0]!;
+    pane.cwd = "E:\\Work";
+
+    await expect(store.searchWorkspaceFiles(pane, "guide")).resolves.toEqual([
+      { name: "guide.md", path: "E:\\Work\\docs\\guide.md", relativePath: "docs\\guide.md" }
+    ]);
+    expect(api.request).toHaveBeenCalledWith({ method: "fuzzyFileSearch", params: { query: "guide", roots: ["E:\\Work"], cancellationToken: null } });
+  });
+
   it("lists and switches only allowed permission profiles", async () => {
     const api = installApi(Promise.resolve({ connection: connection("ready"), workspace: null }));
     api.request.mockImplementation(async (requestValue: { method: string }) => {
       if (requestValue.method === "model/list") return { data: [] };
       if (requestValue.method === "account/read") return { account: null, requiresOpenaiAuth: false };
       if (requestValue.method === "account/rateLimits/read") return {};
-      if (requestValue.method === "permissionProfile/list") return { data: [{ id: ":workspace", description: "工作区", allowed: true }, { id: ":forbidden", description: "不可用", allowed: false }] };
+      if (requestValue.method === "permissionProfile/list") return { data: [
+        { id: ":read-only", description: "只读", allowed: true },
+        { id: ":workspace", description: "工作区", allowed: true },
+        { id: ":danger-full-access", description: "完全访问", allowed: true },
+        { id: ":forbidden", description: "不可用", allowed: false }
+      ] };
       if (requestValue.method === "thread/start") return { thread: { id: "thread-permission" }, cwd: "E:\\Work", activePermissionProfile: { id: ":workspace" } };
       return {};
     });
     const store = useWorkspaceStore();
     await store.initialize();
     const pane = store.state.panes[0]!;
+    pane.approvalPolicy = "on-request";
+    pane.approvalsReviewer = "user";
     await store.executeSlashCommand(pane, "permissions");
-    expect(pane.items.at(-1)?.data.profiles).toEqual([{ id: ":workspace", description: "工作区", allowed: true }]);
-    await store.handleItemAction(pane, { type: "switchPermissionProfile", profileId: ":workspace" });
-    expect(api.request).toHaveBeenCalledWith({ method: "thread/settings/update", params: { threadId: "thread-permission", permissions: ":workspace" } });
+    expect(pane.items.at(-1)?.data.modes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "readOnly", profileId: ":read-only" }),
+      expect.objectContaining({ id: "ask", profileId: ":workspace", approvalsReviewer: "user" }),
+      expect.objectContaining({ id: "auto", profileId: ":workspace", approvalsReviewer: "auto_review" }),
+      expect.objectContaining({ id: "full", profileId: ":danger-full-access" })
+    ]));
+    expect(pane.items.at(-1)?.data.modes).toHaveLength(4);
+    expect(JSON.stringify(pane.items.at(-1)?.data)).not.toContain(":forbidden");
+    await store.handleItemAction(pane, { type: "switchPermissionMode", profileId: ":workspace", approvalPolicy: "on-request", approvalsReviewer: "auto_review" });
+    expect(api.request).toHaveBeenCalledWith({ method: "thread/settings/update", params: { threadId: "thread-permission", permissions: ":workspace", approvalPolicy: "on-request", approvalsReviewer: "auto_review" } });
+    api.emitProtocol({ generation: 1, kind: "notification", payload: { method: "thread/settings/updated", params: { threadId: "thread-permission", threadSettings: { activePermissionProfile: { id: ":workspace" }, approvalPolicy: "on-request", approvalsReviewer: "auto_review" } } } });
+    expect(pane.approvalsReviewer).toBe("auto_review");
+    expect(pane.items.at(-1)).toMatchObject({ type: "threadSettingsChanged", data: { changes: [{ label: "权限模式", value: "自动审批" }] } });
+  });
+
+  it("renames sessions and maps goal, plan, and fast commands to app-server", async () => {
+    const api = installApi(Promise.resolve({ connection: connection("ready"), workspace: null }));
+    api.request.mockImplementation(async (requestValue: { method: string; params?: Record<string, unknown> }) => {
+      if (requestValue.method === "model/list") return { data: [{ id: "gpt-test", displayName: "GPT Test", serviceTiers: [{ id: "priority", name: "fast", description: "Fastest inference" }] }] };
+      if (requestValue.method === "account/read") return { account: null };
+      if (requestValue.method === "account/rateLimits/read") return {};
+      if (requestValue.method === "thread/start") return { thread: { id: "thread-commands" }, model: "gpt-test", cwd: "E:\\Work" };
+      if (requestValue.method === "thread/goal/set") return { goal: { threadId: "thread-commands", objective: requestValue.params?.objective, status: "active" } };
+      if (requestValue.method === "collaborationMode/list") return { data: [{ name: "Plan", mode: "plan", model: "gpt-test", reasoning_effort: "high" }] };
+      return {};
+    });
+    const store = useWorkspaceStore();
+    await store.initialize();
+    const pane = store.state.panes[0]!;
+    pane.model = "gpt-test";
+
+    await store.executeSlashCommand(pane, "rename 新名称");
+    expect(api.request).toHaveBeenCalledWith({ method: "thread/name/set", params: { threadId: "thread-commands", name: "新名称" } });
+    expect(pane.title).toBe("新名称");
+    await store.executeSlashCommand(pane, "goal 完成协议适配");
+    expect(api.request).toHaveBeenCalledWith({ method: "thread/goal/set", params: { threadId: "thread-commands", objective: "完成协议适配", status: "active" } });
+    api.emitProtocol({ generation: 1, kind: "notification", payload: { method: "thread/goal/updated", params: { threadId: "thread-commands", goal: { threadId: "thread-commands", objective: "完成协议适配", status: "active", tokenBudget: null, tokensUsed: 0, timeUsedSeconds: 0, createdAt: 1, updatedAt: 1 } } } });
+    expect(pane.goal?.status).toBe("active");
+    expect(pane.items.at(-1)).toMatchObject({ type: "goalStatus", data: { state: "active", objective: "完成协议适配" } });
+    await store.executeSlashCommand(pane, "goal pause");
+    api.emitProtocol({ generation: 1, kind: "notification", payload: { method: "thread/goal/updated", params: { threadId: "thread-commands", goal: { ...pane.goal, status: "paused", timeUsedSeconds: 90, updatedAt: 2 } } } });
+    expect(pane.items.at(-1)).toMatchObject({ type: "goalStatus", data: { state: "paused", objective: "完成协议适配" } });
+    await store.executeSlashCommand(pane, "goal resume");
+    api.emitProtocol({ generation: 1, kind: "notification", payload: { method: "thread/goal/updated", params: { threadId: "thread-commands", goal: { ...pane.goal, status: "active", updatedAt: 3 } } } });
+    expect(pane.items.at(-1)).toMatchObject({ type: "goalStatus", data: { state: "resumed", objective: "完成协议适配" } });
+    await store.executeSlashCommand(pane, "goal clear");
+    api.emitProtocol({ generation: 1, kind: "notification", payload: { method: "thread/goal/cleared", params: { threadId: "thread-commands" } } });
+    expect(pane.items.at(-1)).toMatchObject({ type: "goalStatus", data: { state: "empty" } });
+    await store.executeSlashCommand(pane, "plan");
+    expect(api.request).toHaveBeenCalledWith({ method: "thread/settings/update", params: { threadId: "thread-commands", collaborationMode: { mode: "plan", settings: { model: "gpt-test", reasoning_effort: "high", developer_instructions: null } } } });
+    api.emitProtocol({ generation: 1, kind: "notification", payload: { method: "thread/settings/updated", params: { threadId: "thread-commands", threadSettings: { collaborationMode: { mode: "plan" } } } } });
+    expect(pane.collaborationMode).toBe("plan");
+    expect(pane.items.at(-1)).toMatchObject({ type: "threadSettingsChanged", data: { changes: [{ label: "协作模式", value: "计划模式" }] } });
+    await store.executeSlashCommand(pane, "fast");
+    expect(api.request).toHaveBeenCalledWith({ method: "thread/settings/update", params: { threadId: "thread-commands", serviceTier: "priority" } });
+    api.emitProtocol({ generation: 1, kind: "notification", payload: { method: "thread/settings/updated", params: { threadId: "thread-commands", threadSettings: { serviceTier: "priority" } } } });
+    expect(pane.serviceTier).toBe("priority");
+    expect(pane.items.at(-1)).toMatchObject({ type: "threadSettingsChanged", data: { changes: [{ label: "服务模式", value: "快速模式" }] } });
+    await store.executeSlashCommand(pane, "fast");
+    expect(api.request).toHaveBeenCalledWith({ method: "thread/settings/update", params: { threadId: "thread-commands", serviceTier: "default" } });
+    api.emitProtocol({ generation: 1, kind: "notification", payload: { method: "thread/settings/updated", params: { threadId: "thread-commands", threadSettings: { serviceTier: "default" } } } });
+    expect(pane.serviceTier).toBe("default");
+    await store.executeSlashCommand(pane, "unknown-command");
+    expect(pane.error).toBe("命令执行失败：不支持的命令：/unknown-command");
+    expect(api.request.mock.calls.filter(([requestValue]) => requestValue.method === "skills/list")).toHaveLength(0);
   });
 
   it("maps account update notifications to readable API and subscription labels", async () => {
@@ -417,6 +528,170 @@ describe("workspace state machine", () => {
     await expect(store.resumeThread(pane, "thread-other")).rejects.toThrow("仍在运行");
   });
 
+  it("releases an idle sidebar session before reusing its memory", async () => {
+    const api = installApi(Promise.resolve({ connection: connection("ready"), workspace: null }));
+    api.request.mockImplementation(async (requestValue: { method: string; params?: Record<string, unknown> }) => {
+      if (requestValue.method === "model/list") return { data: [] };
+      if (requestValue.method === "account/read") return { account: null };
+      if (requestValue.method === "account/rateLimits/read") return {};
+      if (requestValue.method === "thread/resume") return { thread: { id: requestValue.params?.threadId, turns: [] } };
+      return {};
+    });
+    const store = useWorkspaceStore();
+    await store.initialize();
+    const pane = store.state.panes[0]!;
+    store.state.workspaceMode = "sessionSidebar";
+    store.state.focusedPaneId = pane.id;
+    pane.threadId = "thread-idle";
+    pane.items = [{ id: "old-item", turnId: "old-turn", type: "agentMessage", data: {}, streamText: "old", status: "completed" }];
+
+    const destination = await store.switchSidebarThread(pane, "thread-next");
+
+    expect(destination).not.toBe(pane);
+    expect(api.request).toHaveBeenCalledWith({ method: "thread/unsubscribe", params: { threadId: "thread-idle" } });
+    expect(pane.threadId).toBeNull();
+    expect(pane.items).toEqual([]);
+    expect(destination.threadId).toBe("thread-next");
+  });
+
+  it("keeps the current sidebar session visible when the target resume fails", async () => {
+    const api = installApi(Promise.resolve({ connection: connection("ready"), workspace: null }));
+    api.request.mockImplementation(async (requestValue: { method: string }) => {
+      if (requestValue.method === "model/list") return { data: [] };
+      if (requestValue.method === "account/read") return { account: null };
+      if (requestValue.method === "account/rateLimits/read") return {};
+      if (requestValue.method === "thread/resume") throw new Error("会话已在其他客户端中打开");
+      return {};
+    });
+    const store = useWorkspaceStore();
+    await store.initialize();
+    const pane = store.state.panes[0]!;
+    store.state.workspaceMode = "sessionSidebar";
+    store.state.focusedPaneId = pane.id;
+    pane.threadId = "thread-current";
+    pane.title = "当前会话";
+    pane.items = [{ id: "current-item", turnId: "turn-current", type: "agentMessage", data: {}, streamText: "保留内容", status: "completed" }];
+
+    await expect(store.switchSidebarThread(pane, "thread-external")).rejects.toThrow("无法恢复会话：会话已在其他客户端中打开");
+
+    expect(store.state.focusedPaneId).toBe(pane.id);
+    expect(pane.threadId).toBe("thread-current");
+    expect(pane.title).toBe("当前会话");
+    expect(pane.items[0]?.streamText).toBe("保留内容");
+    expect(pane.error).toBeNull();
+  });
+
+  it("derives an unnamed resumed session title after hydrating its history", async () => {
+    const api = installApi(Promise.resolve({ connection: connection("ready"), workspace: null }));
+    api.request.mockImplementation(async (requestValue: { method: string }) => {
+      if (requestValue.method === "model/list") return { data: [] };
+      if (requestValue.method === "account/read") return { account: null };
+      if (requestValue.method === "account/rateLimits/read") return {};
+      if (requestValue.method === "thread/resume") return {
+        thread: { id: "thread-unnamed", name: null },
+        initialTurnsPage: {
+          data: [{ id: "turn-first", status: "completed", items: [{ id: "message-first", type: "userMessage", content: [{ type: "text", text: "修复恢复后的会话标题", text_elements: [] }] }] }],
+          nextCursor: null
+        }
+      };
+      return {};
+    });
+    const store = useWorkspaceStore();
+    await store.initialize();
+
+    await store.resumeThread(store.state.panes[0]!, "thread-unnamed");
+
+    expect(store.state.panes[0]!.title).toBe("修复恢复后的会话标题");
+  });
+
+  it("keeps unlimited working sessions behind the sidebar", async () => {
+    const api = installApi(Promise.resolve({ connection: connection("ready"), workspace: null }));
+    api.request.mockImplementation(async (requestValue: { method: string; params?: Record<string, unknown> }) => {
+      if (requestValue.method === "model/list") return { data: [] };
+      if (requestValue.method === "account/read") return { account: null };
+      if (requestValue.method === "account/rateLimits/read") return {};
+      if (requestValue.method === "thread/resume") return { thread: { id: requestValue.params?.threadId, turns: [] } };
+      return {};
+    });
+    const store = useWorkspaceStore();
+    await store.initialize();
+    store.state.workspaceMode = "sessionSidebar";
+    store.state.panes.forEach((pane, index) => {
+      pane.threadId = `thread-running-${index}`;
+      pane.activeTurnId = `turn-${index}`;
+      pane.status = "running";
+    });
+    const current = store.state.panes[0]!;
+    store.state.focusedPaneId = current.id;
+
+    const destination = await store.switchSidebarThread(current, "thread-seventh");
+
+    expect(store.state.panes).toHaveLength(7);
+    expect(destination.id).toMatch(/^sidebar-pane-/);
+    expect(destination.threadId).toBe("thread-seventh");
+    expect(current.threadId).toBe("thread-running-0");
+    expect(current.status).toBe("running");
+
+    vi.useFakeTimers();
+    try {
+      store.scheduleSave();
+      await vi.advanceTimersByTimeAsync(500);
+      const saved = vi.mocked(window.codexPane.saveWorkspace).mock.calls.at(-1)?.[0];
+      expect(saved?.panes).toHaveLength(6);
+      expect(saved?.panes.some((pane) => pane.id === saved.focusedPaneId)).toBe(true);
+      expect(saved?.panes.some((pane) => pane.id.startsWith("sidebar-pane-"))).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("releases a completed background session and keeps its unread marker", async () => {
+    const api = installApi(Promise.resolve({ connection: connection("ready"), workspace: null }));
+    const store = useWorkspaceStore();
+    await store.initialize();
+    store.state.workspaceMode = "sessionSidebar";
+    const foreground = store.state.panes[0]!;
+    const background = store.state.panes[1]!;
+    foreground.threadId = "thread-foreground";
+    store.state.focusedPaneId = foreground.id;
+    background.threadId = "thread-background";
+    background.activeTurnId = "turn-background";
+    background.status = "running";
+
+    api.emitProtocol({
+      generation: 1,
+      kind: "notification",
+      payload: { method: "turn/completed", params: { threadId: "thread-background", turn: { id: "turn-background", status: "completed", items: [] } } }
+    });
+
+    await vi.waitFor(() => expect(background.threadId).toBeNull());
+    expect(store.state.sidebarUnreadThreadIds).toContain("thread-background");
+    expect(api.request).toHaveBeenCalledWith({ method: "thread/unsubscribe", params: { threadId: "thread-background" } });
+  });
+
+  it("starts a clean session while keeping pane-level working preferences", async () => {
+    installApi(Promise.resolve({ connection: connection("ready"), workspace: null }));
+    const store = useWorkspaceStore();
+    await store.initialize();
+    const pane = store.state.panes[0]!;
+    pane.title = "旧会话";
+    pane.threadId = "thread-old";
+    pane.cwd = "E:\\Work";
+    pane.model = "gpt-test";
+    pane.effort = "high";
+    pane.draft = "旧草稿";
+    pane.attachments = [{ id: crypto.randomUUID(), name: "old.png", url: "codex-media://old", size: 1, kind: "local" }];
+    pane.references = [{ id: crypto.randomUUID(), name: "old.txt", path: "E:\\Work\\old.txt" }];
+    pane.skills = [{ name: "old-skill", description: "", path: "E:\\skills\\old" }];
+
+    store.newThread(pane);
+
+    expect(pane).toMatchObject({ title: "新会话", threadId: null, cwd: "E:\\Work", model: "gpt-test", effort: "high", draft: "" });
+    expect(pane.attachments).toEqual([]);
+    expect(pane.references).toEqual([]);
+    expect(pane.skills).toEqual([]);
+  });
+
   it("ignores stale-generation notifications after reconnect", async () => {
     const api = installApi(Promise.resolve({ connection: connection("ready", 2), workspace: workspaceWithThread("thread-old") }));
     const store = useWorkspaceStore();
@@ -538,6 +813,11 @@ describe("workspace state machine", () => {
     expect(pane.cwd).toBe("E:\\Work");
     expect(pane.model).toBe("gpt-test");
     expect(pane.effort).toBe("high");
+    expect(pane.items.at(-1)).toMatchObject({ type: "threadSettingsChanged", data: { changes: [
+      { label: "工作目录", value: "E:\\Work" },
+      { label: "模型", value: "gpt-test" },
+      { label: "推理强度", value: "high" }
+    ] } });
     api.emitProtocol({ generation: 2, kind: "notification", payload: { method: "thread/status/changed", params: { threadId: "thread-a", status: { type: "idle" } } } });
     expect(pane.status).toBe("idle");
   });
@@ -597,8 +877,9 @@ describe("workspace state machine", () => {
       expect(pane.items.at(-1)?.data.quotas).toEqual(["无额度数据"]);
 
       store.updateAppearance({ fontSize: 18, accentColor: "#112233" });
+      store.setWorkspaceMode("sessionSidebar");
       await vi.advanceTimersByTimeAsync(500);
-      expect(window.codexPane.saveWorkspace).toHaveBeenCalledWith(expect.objectContaining({ appearance: { theme: "light", fontFamily: "Consolas", fontSize: 18, accentColor: "#112233", commandShellPath: "", mcpGatewayAdaptation: true } }));
+      expect(window.codexPane.saveWorkspace).toHaveBeenCalledWith(expect.objectContaining({ workspaceMode: "sessionSidebar", appearance: { theme: "light", fontFamily: "Consolas", fontSize: 18, accentColor: "#112233", commandShellPath: "", mcpGatewayAdaptation: true } }));
     } finally {
       vi.useRealTimers();
     }
@@ -630,10 +911,12 @@ describe("workspace state machine", () => {
     api.emitProtocol({ generation: 2, kind: "notification", payload: { method: "turn/diff/updated", params: { threadId: "thread-a", turnId: "turn-a", diff: "diff --git a/a b/b" } } });
     expect(pane.turnDiff).toContain("diff --git");
 
-    api.emitProtocol({ generation: 2, kind: "notification", payload: { method: "item/started", params: { threadId: "thread-a", turnId: "turn-a", item: { id: "command-a", type: "commandExecution", command: "npm test", cwd: "E:\\Work", status: "inProgress", commandActions: [] } } } });
+    api.emitProtocol({ generation: 2, kind: "notification", payload: { method: "item/started", params: { threadId: "thread-a", turnId: "turn-a", item: { id: "command-a", type: "commandExecution", processId: "42", command: "npm test", cwd: "E:\\Work", status: "inProgress", commandActions: [] } } } });
     expect(pane.items.find((item) => item.id === "command-a")?.status).toBe("running");
-    api.emitProtocol({ generation: 2, kind: "notification", payload: { method: "item/completed", params: { threadId: "thread-a", turnId: "turn-a", item: { id: "command-a", type: "commandExecution", command: "npm test", cwd: "E:\\Work", status: "failed", commandActions: [], exitCode: 1 } } } });
+    expect(pane.backgroundTerminals).toEqual([expect.objectContaining({ processId: "42", command: "npm test" })]);
+    api.emitProtocol({ generation: 2, kind: "notification", payload: { method: "item/completed", params: { threadId: "thread-a", turnId: "turn-a", item: { id: "command-a", type: "commandExecution", processId: "42", command: "npm test", cwd: "E:\\Work", status: "failed", commandActions: [], exitCode: 1 } } } });
     expect(pane.items.find((item) => item.id === "command-a")?.status).toBe("failed");
+    expect(pane.backgroundTerminals).toEqual([]);
 
     api.emitProtocol({ generation: 2, kind: "notification", payload: { method: "item/fileChange/patchUpdated", params: { threadId: "thread-a", turnId: "turn-a", itemId: "patch-a", changes: [{ path: "old.ts", kind: { type: "update", move_path: "new.ts" }, diff: "" }] } } });
     expect(getRecordForTest(pane.items.find((item) => item.id === "patch-a")?.data.changes)[0]?.kind).toEqual({ type: "update", move_path: "new.ts" });
@@ -645,6 +928,7 @@ describe("workspace state machine", () => {
     expect(pane.items.find((item) => item.id === "web-a")?.status).toBe("completed");
 
     api.emitProtocol({ generation: 2, kind: "notification", payload: { method: "item/started", params: { threadId: "thread-a", turnId: "turn-a", item: { id: "sub-a", type: "subAgentActivity", kind: "started", agentThreadId: "thread-sub", agentPath: "/root/sub" } } } });
+    expect(pane.subAgents?.["thread-sub"]?.status).toBe("running");
     api.emitProtocol({ generation: 2, kind: "notification", payload: { method: "item/completed", params: { threadId: "thread-a", turnId: "turn-a", item: { id: "collab-a", type: "collabAgentToolCall", tool: "wait", status: "completed", senderThreadId: "thread-a", receiverThreadIds: ["thread-sub"], agentsStates: { "thread-sub": { status: "completed", message: "done" } } } } } });
     expect(pane.subAgents?.["thread-sub"]).toMatchObject({ path: "/root/sub", status: "completed", message: "done" });
   });
@@ -694,13 +978,13 @@ describe("workspace state machine", () => {
     await store.executeSlashCommand(pane, "agents");
     expect(api.request).toHaveBeenCalledWith(expect.objectContaining({ method: "thread/list", params: expect.objectContaining({ ancestorThreadId: "thread-a", sourceKinds: expect.arrayContaining(["subAgent", "subAgentReview"]) }) }));
     expect(pane.items.at(-1)?.type).toBe("agents");
-    await store.executeSlashCommand(pane, "processes");
+    await store.executeSlashCommand(pane, "ps");
     expect(pane.items.at(-1)?.data.processes).toHaveLength(1);
     await store.handleItemAction(pane, { type: "stopBackgroundProcess", processId: "42" });
     expect(api.request).toHaveBeenCalledWith({ method: "thread/backgroundTerminals/terminate", params: { threadId: "thread-a", processId: "42" } });
     await store.handleItemAction(pane, { type: "switchAgent", threadId: "thread-sub" });
     expect(pane.threadId).toBe("thread-sub");
-    await store.executeSlashCommand(pane, "kill-processes");
+    await store.executeSlashCommand(pane, "stop");
     expect(pane.items.at(-1)).toMatchObject({ type: "backgroundProcesses", data: { result: { requested: 1, terminated: 1 } } });
   });
 });

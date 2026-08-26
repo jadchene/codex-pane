@@ -31,4 +31,21 @@ describe("SessionDrawer", () => {
     expect(wrapper.text()).toContain("所有工作目录");
     expect(wrapper.get(".session-scope-button").text()).toBe("仅当前目录");
   });
+
+  it("shows one session title without a second preview line", () => {
+    const wrapper = mount(SessionDrawer, {
+      props: {
+        show: true,
+        pane,
+        threads: [{ id: "thread-1", name: "重命名标题", preview: "协议里的第二行预览", cwd: "E:\\Work", updatedAt: 1, status: "idle" }],
+        showAll: true,
+        currentCwd: "E:\\Work"
+      },
+      global: { stubs: { teleport: true } }
+    });
+
+    expect(wrapper.text()).toContain("重命名标题");
+    expect(wrapper.text()).not.toContain("协议里的第二行预览");
+    expect(wrapper.find(".session-preview").exists()).toBe(false);
+  });
 });

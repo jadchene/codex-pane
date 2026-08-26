@@ -7,7 +7,9 @@ import { _electron as electron, expect, test, type ElectronApplication } from "@
 const approvalFixtureMarker = resolve(".approval-fixture");
 const runLiveApproval = existsSync(resolve(".live-approval"));
 const userApprovalFixtureMarker = resolve(".user-approval-fixture");
+const sessionFixtureMarker = resolve(".session-fixture");
 rmSync(approvalFixtureMarker, { force: true });
+rmSync(sessionFixtureMarker, { force: true });
 if (!runLiveApproval) rmSync(userApprovalFixtureMarker, { force: true });
 
 const isolatedEnv = (): Record<string, string> => ({
@@ -65,6 +67,44 @@ test("supports two application instances with isolated Chromium data", async () 
   }
 });
 
+test("switches sessions in the persistent session-sidebar mode", async () => {
+  await writeFile(sessionFixtureMarker, "", "utf8");
+  const env = isolatedEnv();
+  let application: ElectronApplication | null = null;
+  try {
+    application = await launchApplication(env);
+    let window = await application.firstWindow();
+    await expect(window.getByRole("button", { name: "设置" })).toBeVisible({ timeout: 20_000 });
+    await window.getByRole("button", { name: "设置" }).click();
+    const settingsDialog = window.getByRole("dialog").filter({ hasText: "工作台模式" });
+    await settingsDialog.getByText("会话侧栏", { exact: true }).click();
+    await settingsDialog.getByRole("button", { name: /关闭|close/i }).click();
+    await expect(window.locator(".session-sidebar")).toBeVisible();
+    await expect(window.locator(".pane")).toHaveCount(1);
+    await expect.poll(() => window.locator("section.pane").evaluate((pane) => {
+      const composer = pane.querySelector<HTMLElement>(".composer");
+      return composer ? Math.round(pane.getBoundingClientRect().bottom - composer.getBoundingClientRect().bottom) : -1;
+    })).toBeLessThanOrEqual(1);
+    await expect(window.getByText("示例会话 A", { exact: true })).toBeVisible();
+    await window.getByText("示例会话 B", { exact: true }).click();
+    await expect(window.locator("section.pane")).toHaveAttribute("aria-label", "示例会话 B");
+    await window.waitForTimeout(700);
+
+    await application.close();
+    application = await launchApplication(env);
+    window = await application.firstWindow();
+    await expect(window.locator(".session-sidebar")).toBeVisible({ timeout: 20_000 });
+    await expect(window.locator(".pane")).toHaveCount(1);
+    await expect(window.locator("section.pane")).toHaveAttribute("aria-label", "示例会话 B");
+  } finally {
+    try {
+      await application?.close();
+    } finally {
+      await rm(sessionFixtureMarker, { force: true });
+    }
+  }
+});
+
 test("starts the desktop workbench and connects to Codex", async () => {
   const pageErrors: string[] = [];
   const application = await launchApplication(isolatedEnv());
@@ -113,9 +153,12 @@ test("starts the desktop workbench and connects to Codex", async () => {
     await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setSize(960, 680));
     await window.waitForTimeout(150);
     const narrowStatus = window.locator(".status-line").first();
+    const narrowComposerActions = window.locator(".composer-actions").first();
     expect(await narrowStatus.evaluate((element) => getComputedStyle(element).flexWrap)).toBe("wrap");
+    expect(await narrowComposerActions.evaluate((element) => getComputedStyle(element).flexWrap)).toBe("wrap");
     expect((await window.locator(".model-select").first().boundingBox())?.width ?? 0).toBeGreaterThanOrEqual(116);
     expect(await narrowStatus.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+    expect(await narrowComposerActions.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
     expect(Number.parseFloat(await narrowStatus.evaluate((element) => getComputedStyle(element).fontSize))).toBeGreaterThanOrEqual(12);
     expect(Number.parseFloat(await window.locator(".cwd-text").first().evaluate((element) => getComputedStyle(element).fontSize))).toBeGreaterThanOrEqual(12);
     await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setSize(1480, 920));
@@ -213,8 +256,45 @@ test("starts the desktop workbench and connects to Codex", async () => {
     const settingsBox = await settingsDialog.boundingBox();
     expect(settingsBox?.height ?? 1000).toBeLessThanOrEqual(720);
     expect((await window.evaluate(() => innerHeight)) - (settingsBox?.height ?? 0)).toBeGreaterThanOrEqual(90);
+    await settingsDialog.getByText("会话侧栏", { exact: true }).click();
+    await expect(window.locator(".session-sidebar")).toBeVisible();
+    await expect(window.locator(".pane")).toHaveCount(1);
+    await expect(window.getByRole("button", { name: "切换窗格布局" })).toHaveCount(0);
     await settingsDialog.getByRole("button", { name: /关闭|close/i }).click();
     await expect(settingsDialog).toHaveCount(0);
+    await expect(window.getByRole("button", { name: "新建会话" })).toBeVisible();
+    await expect(window.locator(".session-list-scroll")).toBeVisible();
+    const sessionModeMetrics = await window.locator(".session-workspace").evaluate((element) => {
+      const sidebar = element.querySelector<HTMLElement>(".session-sidebar")!;
+      const newSessionButton = sidebar.querySelector<HTMLElement>(".session-new-button")!;
+      const pane = element.querySelector<HTMLElement>(".session-workspace-pane")!;
+      const sidebarBounds = sidebar.getBoundingClientRect();
+      const buttonBounds = newSessionButton.getBoundingClientRect();
+      return {
+        overflow: element.scrollWidth - element.clientWidth,
+        newButtonLeftInset: buttonBounds.left - sidebarBounds.left,
+        newButtonRightInset: sidebarBounds.right - buttonBounds.right,
+        sidebarHeight: sidebar.getBoundingClientRect().height,
+        paneHeight: pane.getBoundingClientRect().height,
+        totalHeight: element.getBoundingClientRect().height,
+        focusBorderDisplay: getComputedStyle(pane.querySelector(".pane")!, "::after").display
+      };
+    });
+    expect(sessionModeMetrics.overflow).toBe(0);
+    expect(sessionModeMetrics.newButtonLeftInset).toBeGreaterThanOrEqual(11);
+    expect(sessionModeMetrics.newButtonRightInset).toBeGreaterThanOrEqual(11);
+    expect(Math.abs(sessionModeMetrics.sidebarHeight - sessionModeMetrics.totalHeight)).toBeLessThanOrEqual(2);
+    expect(Math.abs(sessionModeMetrics.paneHeight - sessionModeMetrics.totalHeight)).toBeLessThanOrEqual(2);
+    expect(sessionModeMetrics.focusBorderDisplay).toBe("none");
+    await window.waitForTimeout(700);
+    const sessionModeState = JSON.parse(await readFile(resolve(userDataPath, "workspaces/default.json"), "utf8")) as { workspaceMode: string; layout: string };
+    expect(sessionModeState).toMatchObject({ workspaceMode: "sessionSidebar", layout: "quad" });
+    await window.getByRole("button", { name: "设置" }).click();
+    const sessionModeSettings = window.getByRole("dialog").filter({ hasText: "工作台模式" });
+    await sessionModeSettings.getByText("多窗格", { exact: true }).click();
+    await sessionModeSettings.getByRole("button", { name: /关闭|close/i }).click();
+    await expect(window.locator(".pane")).toHaveCount(4);
+    await expect(window.getByRole("button", { name: "切换窗格布局" })).toBeVisible();
     await selectLayout(window, "单窗格");
     await expect(window.locator(".pane")).toHaveCount(1);
     expect(await window.locator(".pane").evaluate((element) => getComputedStyle(element, "::after").display)).toBe("none");

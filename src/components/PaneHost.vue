@@ -4,13 +4,13 @@ import type { PendingServerRequest } from "../types";
 import { useWorkspaceStore } from "../stores/workspace";
 import PaneView from "./PaneView.vue";
 
-const props = defineProps<{ index: number }>();
+const props = withDefaults(defineProps<{ index: number; includeGlobalRequests?: boolean }>(), { includeGlobalRequests: false });
 const emit = defineEmits<{ openSessions: [paneId: string] }>();
 const store = useWorkspaceStore();
 const pane = computed(() => store.state.panes[props.index]!);
 const paneView = ref<InstanceType<typeof PaneView> | null>(null);
 const approvalResolving = ref(false);
-const paneRequests = computed(() => store.state.pendingRequests.filter((request) => request.paneId === pane.value.id || request.paneId === null && props.index === 0));
+const paneRequests = computed(() => store.state.pendingRequests.filter((request) => request.paneId === pane.value.id || request.paneId === null && (props.index === 0 || props.includeGlobalRequests)));
 
 const resolveRequest = async (request: PendingServerRequest, result?: unknown, error?: { code: number; message: string }): Promise<void> => {
   if (approvalResolving.value) return;
@@ -47,9 +47,13 @@ defineExpose({ focusComposer });
     :pending-requests="paneRequests"
     :approval-resolving="approvalResolving"
     :rate-limit-labels="store.state.rateLimitLabels"
+    :show-title="store.state.workspaceMode !== 'sessionSidebar'"
     :approval-reviewer="store.state.effectiveConfig?.approvalReviewer"
+    :approval-policy="store.state.effectiveConfig?.approvalPolicy"
+    :sandbox-mode="store.state.effectiveConfig?.sandboxMode"
     :command-shell-path="store.state.appearance.commandShellPath"
     :mcp-gateway-adaptation="store.state.appearance.mcpGatewayAdaptation"
+    :search-files="query => store.searchWorkspaceFiles(pane, query)"
     @send="store.send(pane)"
     @interrupt="store.interrupt(pane)"
     @new-thread="store.newThread(pane)"

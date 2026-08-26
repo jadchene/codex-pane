@@ -22,7 +22,7 @@ describe("SettingsModal", () => {
     setActivePinia(pinia);
     const store = useWorkspaceStore();
     const wrapper = mount(SettingsModal, { props: { show: true }, global: { plugins: [pinia], stubs: { teleport: true } } });
-    wrapper.getComponent(NRadioGroup).vm.$emit("update:value", "light");
+    wrapper.findAllComponents(NRadioGroup).find((group) => group.props("name") === "appearance-theme")!.vm.$emit("update:value", "light");
     wrapper.getComponent(NAutoComplete).vm.$emit("update:value", "Cascadia Code");
     wrapper.getComponent(NInputNumber).vm.$emit("update:value", 18);
     wrapper.getComponent(NColorPicker).vm.$emit("update:value", "#ff3366");
@@ -32,6 +32,17 @@ describe("SettingsModal", () => {
     expect(wrapper.text()).toContain("已读取 2 个字体系列");
     wrapper.getComponent(NSwitch).vm.$emit("update:value", true);
     expect(store.state.appearance.mcpGatewayAdaptation).toBe(true);
+  });
+
+  it("offers the multi-pane and session-sidebar workspace modes", () => {
+    const pinia = createPinia();
+    const wrapper = mount(SettingsModal, { props: { show: true }, global: { plugins: [pinia], stubs: { teleport: true } } });
+    const modeGroup = wrapper.findAllComponents(NRadioGroup).find((group) => group.props("name") === "workspace-mode");
+    expect(modeGroup).toBeTruthy();
+    expect(wrapper.text()).toContain("多窗格");
+    expect(wrapper.text()).toContain("会话侧栏");
+    modeGroup!.vm.$emit("update:value", "sessionSidebar");
+    expect(wrapper.emitted("update:workspaceMode")?.at(-1)).toEqual(["sessionSidebar"]);
   });
 
   it("applies the configured font family and size to application and component tokens", () => {

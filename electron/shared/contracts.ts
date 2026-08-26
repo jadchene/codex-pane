@@ -9,6 +9,10 @@ const managedFileInput = z.object({ type: z.literal("managedFile"), id: z.string
 const skillInput = z.object({ type: z.literal("skill"), name: z.string().min(1).max(512), path: z.string().min(1).max(32_768) });
 const mentionInput = z.object({ type: z.literal("mention"), name: z.string().min(1).max(512), path: z.string().min(1).max(32_768) });
 const userInput = z.union([textInput, localImageInput, remoteImageInput, managedFileInput, skillInput, mentionInput]);
+const collaborationMode = z.object({
+  mode: z.enum(["default", "plan"]),
+  settings: z.object({ model: z.string().max(200), reasoning_effort: z.string().max(50).nullable(), developer_instructions: z.string().max(200_000).nullable() })
+});
 
 export const safeRequestSchema = z.discriminatedUnion("method", [
   z.object({ method: z.literal("model/list"), params: z.object({ limit: z.number().int().min(1).max(200) }) }),
@@ -35,6 +39,12 @@ export const safeRequestSchema = z.discriminatedUnion("method", [
       itemsView: z.literal("full")
     }).optional()
   }) }),
+  z.object({ method: z.literal("thread/unsubscribe"), params: z.object({ threadId: shortId }) }),
+  z.object({ method: z.literal("thread/name/set"), params: z.object({ threadId: shortId, name: z.string().trim().min(1).max(200) }) }),
+  z.object({ method: z.literal("thread/goal/get"), params: z.object({ threadId: shortId }) }),
+  z.object({ method: z.literal("thread/goal/set"), params: z.object({ threadId: shortId, objective: z.string().trim().min(1).max(4_000).optional(), status: z.enum(["active", "paused", "blocked", "usageLimited", "budgetLimited", "complete"]).optional(), tokenBudget: z.number().int().positive().nullable().optional() }).refine((params) => params.objective !== undefined || params.status !== undefined || params.tokenBudget !== undefined, { message: "至少需要更新一项目标设置" }) }),
+  z.object({ method: z.literal("thread/goal/clear"), params: z.object({ threadId: shortId }) }),
+  z.object({ method: z.literal("collaborationMode/list"), params: z.object({}) }),
   z.object({ method: z.literal("thread/turns/list"), params: z.object({
     threadId: shortId,
     cursor: nullableString,
@@ -43,11 +53,20 @@ export const safeRequestSchema = z.discriminatedUnion("method", [
     itemsView: z.literal("full")
   }) }),
   z.object({ method: z.literal("thread/start"), params: z.object({ cwd: nullableString, model: z.string().max(200).nullable(), ephemeral: z.boolean() }) }),
-  z.object({ method: z.literal("thread/settings/update"), params: z.object({ threadId: shortId, cwd: z.string().max(32_768).optional(), permissions: z.string().min(1).max(512).optional() }).refine((params) => params.cwd !== undefined || params.permissions !== undefined, { message: "至少需要一项会话设置" }) }),
+  z.object({ method: z.literal("thread/settings/update"), params: z.object({
+    threadId: shortId,
+    cwd: z.string().max(32_768).optional(),
+    permissions: z.string().min(1).max(512).optional(),
+    approvalPolicy: z.enum(["untrusted", "on-request", "never"]).optional(),
+    approvalsReviewer: z.enum(["user", "auto_review", "guardian_subagent"]).optional(),
+    serviceTier: z.string().max(100).nullable().optional(),
+    collaborationMode: collaborationMode.optional()
+  }).refine((params) => Object.keys(params).some((key) => key !== "threadId"), { message: "至少需要一项会话设置" }) }),
   z.object({ method: z.literal("turn/start"), params: z.object({ threadId: shortId, clientUserMessageId: shortId.nullable().optional(), input: z.array(userInput).min(1).max(100), model: z.string().max(200).nullable(), effort: z.string().max(50).nullable() }) }),
   z.object({ method: z.literal("turn/steer"), params: z.object({ threadId: shortId, clientUserMessageId: shortId.nullable().optional(), expectedTurnId: shortId, input: z.array(userInput).min(1).max(100) }) }),
   z.object({ method: z.literal("turn/interrupt"), params: z.object({ threadId: shortId, turnId: shortId }) }),
   z.object({ method: z.literal("thread/compact/start"), params: z.object({ threadId: shortId }) }),
+  z.object({ method: z.literal("fuzzyFileSearch"), params: z.object({ query: z.string().max(2_000), roots: z.array(z.string().min(1).max(32_768)).min(1).max(1), cancellationToken: nullableString }) }),
   z.object({ method: z.literal("review/start"), params: z.object({ threadId: shortId, target: z.object({ type: z.literal("uncommittedChanges") }), delivery: z.literal("inline") }) }),
   z.object({ method: z.literal("mcpServerStatus/list"), params: z.object({ threadId: shortId.nullable().optional(), limit: z.number().int().min(1).max(100), detail: z.literal("full") }) }),
   z.object({ method: z.literal("mcpServer/oauth/login"), params: z.object({ name: z.string().min(1).max(200), threadId: shortId.nullable().optional(), clientRegistration: z.enum(["auto", "cimd", "dcr"]).nullable().optional(), scopes: z.array(z.string().min(1).max(500)).max(100).nullable().optional() }) }),
@@ -89,6 +108,7 @@ export type MediaAttachment = {
   url: string;
   size: number;
   kind: "local" | "remote";
+  sourcePath?: string;
   sourceUrl?: string;
 };
 
