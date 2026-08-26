@@ -57,7 +57,48 @@ const textValue = (value: unknown): string => {
   return JSON.stringify(redactValue(value), null, 2);
 };
 const shortenedText = (value: unknown, limit = 12_000): string => {
-  const text = textValue(value);
+  if (typeof value === "string") {
+    const truncated = value.length > limit;
+    const text = redactText(truncated ? value.slice(0, limit + 512) : value).slice(0, limit);
+    return truncated ? `${text}\n… 已省略其余内容` : text;
+  }
+  if (!value || typeof value !== "object") {
+    const text = textValue(value);
+    return text.length <= limit ? text : `${text.slice(0, limit)}\n… 已省略 ${text.length - limit} 个字符`;
+  }
+  const budget = { characters: limit, nodes: 2_000 };
+  const summarize = (entry: unknown, key = "", depth = 0): unknown => {
+    if (budget.characters <= 0 || budget.nodes-- <= 0) return "… 已省略其余内容";
+    if (/(token|authorization|api.?key|password|secret)/i.test(key)) return "[已隐藏]";
+    if (typeof entry === "string") {
+      const source = entry.length > budget.characters ? entry.slice(0, budget.characters + 512) : entry;
+      const redacted = redactText(source);
+      const visible = redacted.slice(0, Math.max(0, budget.characters));
+      budget.characters -= visible.length;
+      return source.length < entry.length || visible.length < redacted.length ? `${visible}…` : visible;
+    }
+    if (entry === null || typeof entry !== "object") return entry;
+    if (depth >= 8) return "… 层级过深，已省略";
+    if (Array.isArray(entry)) {
+      const values: unknown[] = [];
+      for (let index = 0; index < entry.length && budget.characters > 0 && budget.nodes > 0; index += 1) values.push(summarize(entry[index], String(index), depth + 1));
+      if (values.length < entry.length) values.push(`… 已省略 ${entry.length - values.length} 项`);
+      return values;
+    }
+    const result: Record<string, unknown> = {};
+    let omitted = false;
+    for (const entryKey in entry as Record<string, unknown>) {
+      if (!Object.prototype.hasOwnProperty.call(entry, entryKey)) continue;
+      if (budget.characters <= 0 || budget.nodes <= 0) {
+        omitted = true;
+        break;
+      }
+      result[entryKey] = summarize((entry as Record<string, unknown>)[entryKey], entryKey, depth + 1);
+    }
+    if (omitted) result["…"] = "已省略其余字段";
+    return result;
+  };
+  const text = JSON.stringify(summarize(value), null, 2) ?? "—";
   return text.length <= limit ? text : `${text.slice(0, limit)}\n… 已省略 ${text.length - limit} 个字符`;
 };
 const prettyText = (value: string): string => {
@@ -374,7 +415,7 @@ const copyText = async (value: string): Promise<void> => {
 
 <template>
   <article v-if="item.type === 'agentMessage'" class="message message-agent item-card">
-    <MarkdownContent :source="displayText" />
+    <MarkdownContent :source="displayText" :streaming="item.status === 'running'" />
     <NTooltip>
       <template #trigger><NButton quaternary circle size="tiny" class="copy-message-button" :aria-label="copied ? '已复制回复' : '复制回复'" @click="copyText(displayText)"><template #icon><NIcon :component="copied ? CheckmarkCircleOutline : CopyOutline" /></template></NButton></template>
       {{ copied ? "已复制" : "复制回复" }}
@@ -384,7 +425,7 @@ const copyText = async (value: string): Promise<void> => {
   <article v-else-if="item.type === 'userMessage'" class="message message-user item-card"><NText>{{ displayText }}</NText></article>
 
   <template v-else-if="item.type === 'reasoning'">
-    <NCard v-if="reasoningText" size="small" class="tool-card item-card" :content-style="compactContentStyle" :header-style="compactHeaderStyle" title="思考摘要"><MarkdownContent :source="reasoningText" /></NCard>
+    <NCard v-if="reasoningText" size="small" class="tool-card item-card" :content-style="compactContentStyle" :header-style="compactHeaderStyle" title="思考摘要"><MarkdownContent :source="reasoningText" :streaming="item.status === 'running'" /></NCard>
   </template>
 
   <NCard v-else-if="item.type === 'status'" size="small" class="tool-card item-card" :content-style="compactContentStyle" :header-style="compactHeaderStyle" title="当前状态">
@@ -478,10 +519,11 @@ const copyText = async (value: string): Promise<void> => {
   <NCard v-else-if="item.type === 'enteredReviewMode' || item.type === 'exitedReviewMode'" size="small" class="tool-card item-card" :content-style="compactContentStyle" :header-style="compactHeaderStyle" :title="title"><MarkdownContent v-if="reviewText !== '—'" :source="reviewText" /><NText v-else depth="3">{{ item.type === "enteredReviewMode" ? "正在审查当前更改" : "审查已结束" }}</NText></NCard>
 
   <NCard v-else-if="item.type === 'imageView' || item.type === 'imageGeneration'" size="small" class="tool-card item-card" :content-style="compactContentStyle" :header-style="compactHeaderStyle" :title="title">
+    <template #header-extra><NTag size="small" :type="statusType">{{ statusLabel }}</NTag></template>
     <NSpace vertical size="small"><NImage v-if="imagePreviewUrl || generatedImageDataUrl" :src="imagePreviewUrl || generatedImageDataUrl || ''" object-fit="contain" width="240" :alt="title" /><NAlert v-else-if="imagePreviewError || record.failure" type="warning" :show-icon="false">图片无法显示：{{ imagePreviewError || textValue(record.failure) }}</NAlert><NText v-else depth="3">图片尚未生成完成</NText><NText v-if="imagePath" code>{{ textValue(imagePath) }}</NText><NText v-if="record.revisedPrompt || record.prompt" depth="3">{{ shortenedText(record.revisedPrompt ?? record.prompt, 800) }}</NText></NSpace>
   </NCard>
 
-  <NCard v-else-if="item.type === 'plan'" size="small" class="tool-card item-card" :content-style="compactContentStyle" :header-style="compactHeaderStyle" title="计划"><template #header-extra><NTag size="small" :type="statusType">{{ statusLabel }}</NTag></template><MarkdownContent v-if="displayText" :source="displayText" /><NDescriptions v-else :column="1" size="small" label-placement="left"><NDescriptionsItem v-for="field in genericFields" :key="field.key" :label="field.label">{{ shortenedText(field.value, 1200) }}</NDescriptionsItem></NDescriptions></NCard>
+  <NCard v-else-if="item.type === 'plan'" size="small" class="tool-card item-card" :content-style="compactContentStyle" :header-style="compactHeaderStyle" title="计划"><template #header-extra><NTag size="small" :type="statusType">{{ statusLabel }}</NTag></template><MarkdownContent v-if="displayText" :source="displayText" :streaming="item.status === 'running'" /><NDescriptions v-else :column="1" size="small" label-placement="left"><NDescriptionsItem v-for="field in genericFields" :key="field.key" :label="field.label">{{ shortenedText(field.value, 1200) }}</NDescriptionsItem></NDescriptions></NCard>
 
   <NCard v-else size="small" class="tool-card item-card" :content-style="compactContentStyle" :header-style="compactHeaderStyle"><template #header><span class="card-title"><NIcon :component="EllipsisHorizontalCircleOutline" /> {{ title }}</span></template><template #header-extra><NTag size="small" :type="statusType">{{ statusLabel }}</NTag></template><NDescriptions v-if="genericFields.length" :column="1" size="small" label-placement="left"><NDescriptionsItem v-for="field in genericFields" :key="field.key" :label="field.label"><pre class="long-output">{{ shortenedText(field.value) }}</pre></NDescriptionsItem></NDescriptions><NText v-else depth="3">暂无可显示内容</NText></NCard>
 </template>

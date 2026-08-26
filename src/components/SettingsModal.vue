@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import { NAlert, NAutoComplete, NButton, NCard, NColorPicker, NDescriptions, NDescriptionsItem, NDivider, NForm, NFormItem, NGrid, NGridItem, NInput, NInputNumber, NModal, NRadioButton, NRadioGroup, NSpace, NSwitch, NTag, NText } from "naive-ui";
+import { NAutoComplete, NButton, NCard, NColorPicker, NDescriptions, NDescriptionsItem, NDivider, NForm, NFormItem, NInput, NInputNumber, NModal, NRadioButton, NRadioGroup, NSpace, NSwitch, NTag, NText } from "naive-ui";
 import { useWorkspaceStore } from "../stores/workspace";
 import type { AppearanceSettings, ThemeMode } from "../types";
 
@@ -75,31 +75,28 @@ watch(() => props.show, (show) => { if (show) void loadSystemFonts(); }, { immed
               <NText v-else-if="fontListState === 'denied'" depth="3">未获得系统字体访问权限，请直接输入已安装字体名称。</NText>
             </div>
           </NFormItem>
-          <NGrid :cols="2" :x-gap="16">
-            <NGridItem><NFormItem label="字号"><NInputNumber v-model:value="fontSize" :min="12" :max="20" :step="1" /></NFormItem></NGridItem>
-            <NGridItem><NFormItem label="强调色"><NColorPicker v-model:value="accentColor" :modes="['hex']" :show-alpha="false" /></NFormItem></NGridItem>
-          </NGrid>
+          <NFormItem label="字号"><NInputNumber v-model:value="fontSize" :min="12" :max="20" :step="1" /></NFormItem>
+          <NFormItem label="强调色"><NColorPicker v-model:value="accentColor" :modes="['hex']" :show-alpha="false" /></NFormItem>
         </NForm>
       </section>
       <NDivider />
       <section class="settings-section">
         <div class="settings-section-heading"><NText strong>Codex 运行环境</NText><NText depth="3">用于新会话和命令执行。</NText></div>
-        <NAlert type="info" :bordered="false" class="settings-note">新会话默认使用这里的目录；需要临时切换时，在对应窗格输入 /cwd。</NAlert>
-        <NCard size="small" embedded>
-          <NSpace align="center" justify="space-between">
-            <NText class="directory-value">{{ store.state.defaultCwd || "未设置，将使用应用目录" }}</NText>
-            <NSpace :wrap="false">
-              <NButton type="primary" secondary @click="store.chooseDefaultDirectory">选择目录</NButton>
-              <NButton v-if="store.state.defaultCwd" secondary @click="store.clearDefaultDirectory">清空</NButton>
-            </NSpace>
-          </NSpace>
-        </NCard>
-        <NForm label-placement="top" class="settings-form shell-form">
-          <NFormItem label="命令外壳路径">
+        <NForm label-placement="left" label-width="148" class="settings-form runtime-form">
+          <NFormItem label="默认工作目录">
+            <NCard size="small" embedded>
+              <NSpace align="center" justify="space-between">
+                <NText class="directory-value">{{ store.state.defaultCwd || "未设置，将使用应用目录" }}</NText>
+                <NSpace :wrap="false">
+                  <NButton type="primary" secondary @click="store.chooseDefaultDirectory">选择目录</NButton>
+                  <NButton v-if="store.state.defaultCwd" secondary @click="store.clearDefaultDirectory">清空</NButton>
+                </NSpace>
+              </NSpace>
+            </NCard>
+          </NFormItem>
+          <NFormItem label="PowerShell 7 路径">
             <NInput v-model:value="commandShellPath" clearable placeholder="C:\Program Files\PowerShell\7\pwsh.exe" />
           </NFormItem>
-        </NForm>
-        <NForm label-placement="left" label-width="148" class="settings-form gateway-form">
           <NFormItem label="MCP Gateway 适配">
             <NSwitch v-model:value="mcpGatewayAdaptation" />
           </NFormItem>
@@ -108,7 +105,6 @@ watch(() => props.show, (show) => { if (show) void loadSystemFonts(); }, { immed
       <NDivider />
       <section class="settings-section">
         <div class="settings-section-heading"><NText strong>当前有效配置</NText><NText depth="3">只读</NText></div>
-        <NAlert type="info" :bordered="false" class="settings-note">这些值由本机 Codex 决定，Codex Pane 只读取，不会在这里修改。</NAlert>
         <NDescriptions v-if="store.state.effectiveConfig" label-placement="left" bordered :column="2">
           <NDescriptionsItem label="默认模型">{{ display(store.state.effectiveConfig.model) }}</NDescriptionsItem>
           <NDescriptionsItem label="模型提供方">{{ display(store.state.effectiveConfig.modelProvider) }}</NDescriptionsItem>
@@ -134,11 +130,11 @@ watch(() => props.show, (show) => { if (show) void loadSystemFonts(); }, { immed
 .settings-section { min-width: 0; }
 .settings-section-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
 .settings-form { margin-top: 12px; }
-.settings-note { margin: 10px 0; }
 .directory-value { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .font-field { display: grid; width: 100%; gap: 5px; }
 .font-field .n-text { font-size: 12px; }
-.shell-form { margin-bottom: -16px; }
+.runtime-form :deep(.n-card) { width: 100%; }
+.settings-form :deep(.n-input-number) { width: 100%; }
 .permission-profiles { margin-top: 12px; }
 @media (max-width: 620px) {
   .settings-form :deep(.n-form-item) { grid-template-columns: 1fr !important; }

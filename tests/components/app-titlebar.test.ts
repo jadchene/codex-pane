@@ -50,7 +50,15 @@ describe("App titlebar", () => {
     expect(layoutButton.text()).toBe("");
     expect(titlebar.get(".titlebar-identity img").attributes("src")).toMatch(/^(?:data:image\/svg\+xml|.+icon\.svg)/);
     const dropdown = titlebar.getComponent(NDropdown);
-    expect(dropdown.props("options")).toHaveLength(5);
+    expect((dropdown.props("options") ?? []).map((option) => (option as { label: string }).label)).toEqual([
+      "单窗格",
+      "左右双栏",
+      "上下双栏",
+      "四宫格",
+      "横向四栏",
+      "纵向四栏",
+      "六宫格"
+    ]);
     dropdown.vm.$emit("select", "quad");
     expect(setLayout).toHaveBeenCalledWith("quad");
     for (const action of ["最小化", "最大化或还原窗口", "关闭"]) await titlebar.get(`button[aria-label="${action}"]`).trigger("click");

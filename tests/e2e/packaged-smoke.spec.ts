@@ -115,7 +115,7 @@ test("keeps Electron and Chromium data beside the unpacked executable", async ()
     expect(paths.userData.toLowerCase()).toBe(expectedDataPath.toLowerCase());
     expect(paths.sessionData.toLowerCase()).toContain(join(expectedDataPath, "chromium").toLowerCase());
     expect(paths.sessionData.toLowerCase()).not.toBe(expectedDataPath.toLowerCase());
-    await selectLayout(window, "四方格");
+    await selectLayout(window, "四宫格");
     await window.waitForTimeout(800);
     const secondModelSelect = window.locator("[data-pane-id='pane-2'] .model-select");
     const secondComposer = window.locator("[data-pane-id='pane-2'] textarea");
@@ -168,18 +168,12 @@ test("verifies the packaged Windows executable, protected persistence, reconnect
     expect(csp).not.toMatch(/localhost|127\.0\.0\.1|ws:|unsafe-eval/i);
 
     const composer = window.getByPlaceholder(/发送消息/).first();
-    await composer.evaluate((element) => {
-      const clipboardData = new DataTransfer();
-      clipboardData.setData("text/plain", "https://example.com/protected.png?token=codex-pane-secret");
-      element.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData }));
-    });
-    await expect(window.getByText("protected.png", { exact: true })).toBeVisible();
-    await window.waitForTimeout(800);
-    const workspacePath = resolve(userDataPath, "workspaces", "default.json");
-    const persistedText = await readFile(workspacePath, "utf8");
-    expect(persistedText).not.toContain("codex-pane-secret");
-    expect(persistedText).not.toContain("https://example.com/protected.png");
-    expect(JSON.parse(persistedText).panes[0].attachments[0].protectedSourceUrl).toEqual(expect.any(String));
+    await application.evaluate(({ clipboard }) => clipboard.writeText("https://example.com/pasted-image.png"));
+    await composer.focus();
+    await window.keyboard.press("Control+V");
+    await expect(composer).toHaveValue("https://example.com/pasted-image.png");
+    await expect(window.getByText("pasted-image.png", { exact: true })).toHaveCount(0);
+    await composer.fill("");
 
     const firstTree = codexDescendants(application.process().pid!).map((process) => process.ProcessId);
     expect(firstTree.length).toBeGreaterThan(0);
@@ -192,7 +186,6 @@ test("verifies the packaged Windows executable, protected persistence, reconnect
 
     if (runLiveChecks) {
       await selectLayout(window, "单窗格");
-      await window.getByRole("button", { name: /移除 protected\.png/ }).click();
       await composer.fill("只回复“Codex Pane 联调成功”，不要调用任何工具。");
       await composer.press("Enter");
       await expect(window.locator(".message-agent").last()).toContainText("Codex Pane 联调成功", { timeout: 90_000 });
@@ -200,12 +193,10 @@ test("verifies the packaged Windows executable, protected persistence, reconnect
       expect((await shortReply.boundingBox())?.height ?? 1000).toBeLessThan(64);
       expect(await shortReply.locator(".copy-message-button").evaluate((element) => getComputedStyle(element).position)).toBe("absolute");
       const imagePath = resolve("node_modules/app-builder-lib/templates/icons/electron-linux/64x64.png");
-      await composer.evaluate((element, path) => {
-        const clipboardData = new DataTransfer();
-        clipboardData.setData("text/plain", path);
-        element.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData }));
-      }, imagePath);
-      await expect(window.getByText("64x64.png", { exact: true })).toBeVisible();
+      await application.evaluate(({ clipboard, nativeImage }, path) => clipboard.writeImage(nativeImage.createFromPath(path)), imagePath);
+      await composer.focus();
+      await window.keyboard.press("Control+V");
+      await expect(window.getByText("剪贴板图片.png", { exact: true })).toBeVisible();
       await composer.fill("只回复“图片附件联调成功”，不要调用任何工具。");
       await composer.press("Enter");
       await expect(window.locator(".message-agent").last()).toContainText("图片附件联调成功", { timeout: 90_000 });
@@ -223,9 +214,9 @@ test("verifies the packaged Windows executable, protected persistence, reconnect
   try {
     const window = await application.firstWindow();
     await waitForWorkbench(window);
-    if (!runLiveChecks) await expect(window.getByText("protected.png", { exact: true })).toBeVisible();
+    if (!runLiveChecks) await expect(window.getByPlaceholder(/发送消息/).first()).toHaveValue("");
     if (runLiveChecks) {
-      await selectLayout(window, "四方格");
+      await selectLayout(window, "四宫格");
       for (let index = 0; index < 4; index += 1) {
         const pane = window.locator(`[data-pane-id="pane-${index + 1}"]`);
         const paneComposer = pane.getByPlaceholder(/发送消息/);

@@ -1,6 +1,6 @@
 import type { ConnectionState, FileReference, MediaAttachment } from "../electron/shared/contracts";
 
-export type LayoutKind = "single" | "vertical" | "horizontal" | "quad" | "six";
+export type LayoutKind = "single" | "vertical" | "horizontal" | "quad" | "fourColumns" | "fourRows" | "six";
 export type ThemeMode = "dark" | "light";
 
 export type AppearanceSettings = {
@@ -93,6 +93,8 @@ export type PaneState = {
   unread: boolean;
   scrollTop: number;
   followTail: boolean;
+  historyCursor?: string | null;
+  historyLoading?: boolean;
 };
 
 export type PendingServerRequest = {

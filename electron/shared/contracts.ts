@@ -5,9 +5,10 @@ const nullableString = z.string().max(32_768).nullable();
 const textInput = z.object({ type: z.literal("text"), text: z.string().max(200_000), text_elements: z.array(z.unknown()).max(100).default([]) });
 const localImageInput = z.object({ type: z.literal("managedImage"), id: z.string().uuid(), detail: z.enum(["low", "high", "auto"]).optional() });
 const remoteImageInput = z.object({ type: z.literal("managedRemoteImage"), url: z.string().url().max(8_192), detail: z.enum(["low", "high", "auto"]).optional() });
+const managedFileInput = z.object({ type: z.literal("managedFile"), id: z.string().uuid(), name: z.string().min(1).max(512) });
 const skillInput = z.object({ type: z.literal("skill"), name: z.string().min(1).max(512), path: z.string().min(1).max(32_768) });
 const mentionInput = z.object({ type: z.literal("mention"), name: z.string().min(1).max(512), path: z.string().min(1).max(32_768) });
-const userInput = z.union([textInput, localImageInput, remoteImageInput, skillInput, mentionInput]);
+const userInput = z.union([textInput, localImageInput, remoteImageInput, managedFileInput, skillInput, mentionInput]);
 
 export const safeRequestSchema = z.discriminatedUnion("method", [
   z.object({ method: z.literal("model/list"), params: z.object({ limit: z.number().int().min(1).max(200) }) }),
@@ -21,10 +22,26 @@ export const safeRequestSchema = z.discriminatedUnion("method", [
     sortKey: z.enum(["created_at", "updated_at"]),
     sortDirection: z.enum(["asc", "desc"]),
     searchTerm: nullableString,
+    cwd: nullableString.optional(),
     ancestorThreadId: shortId.nullable().optional(),
     sourceKinds: z.array(z.enum(["subAgent", "subAgentReview", "subAgentCompact", "subAgentThreadSpawn", "subAgentOther"])).max(5).nullable().optional()
   }) }),
-  z.object({ method: z.literal("thread/resume"), params: z.object({ threadId: shortId, excludeTurns: z.boolean() }) }),
+  z.object({ method: z.literal("thread/resume"), params: z.object({
+    threadId: shortId,
+    excludeTurns: z.boolean(),
+    initialTurnsPage: z.object({
+      limit: z.number().int().min(1).max(100),
+      sortDirection: z.literal("desc"),
+      itemsView: z.literal("full")
+    }).optional()
+  }) }),
+  z.object({ method: z.literal("thread/turns/list"), params: z.object({
+    threadId: shortId,
+    cursor: nullableString,
+    limit: z.number().int().min(1).max(100),
+    sortDirection: z.literal("desc"),
+    itemsView: z.literal("full")
+  }) }),
   z.object({ method: z.literal("thread/start"), params: z.object({ cwd: nullableString, model: z.string().max(200).nullable(), ephemeral: z.boolean() }) }),
   z.object({ method: z.literal("thread/settings/update"), params: z.object({ threadId: shortId, cwd: z.string().max(32_768).optional(), permissions: z.string().min(1).max(512).optional() }).refine((params) => params.cwd !== undefined || params.permissions !== undefined, { message: "至少需要一项会话设置" }) }),
   z.object({ method: z.literal("turn/start"), params: z.object({ threadId: shortId, clientUserMessageId: shortId.nullable().optional(), input: z.array(userInput).min(1).max(100), model: z.string().max(200).nullable(), effort: z.string().max(50).nullable() }) }),
@@ -62,7 +79,7 @@ export type ConnectionState = {
 
 export type ProtocolEvent = {
   generation: number;
-  kind: "notification" | "server-request" | "diagnostic";
+  kind: "notification" | "notification-batch" | "server-request" | "diagnostic";
   payload: unknown;
 };
 
@@ -79,4 +96,10 @@ export type FileReference = {
   id: string;
   name: string;
   path: string;
+  managed?: boolean;
+};
+
+export type AttachmentBatch = {
+  images: MediaAttachment[];
+  files: FileReference[];
 };

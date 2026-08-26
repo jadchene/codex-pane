@@ -61,9 +61,8 @@ const installApi = (bootstrap: Promise<{ connection: ConnectionState; workspace:
     reconnect: vi.fn(),
     setAppServerWorkingDirectory: vi.fn(),
     chooseDirectory: vi.fn(),
-    chooseImage: vi.fn(),
-    chooseFiles: vi.fn(),
-    pasteClipboardImage: vi.fn(),
+    chooseAttachments: vi.fn(),
+    pasteAttachments: vi.fn(),
     importImagePath: vi.fn(),
     addRemoteImage: vi.fn(),
     saveWorkspace: vi.fn(async (): Promise<void> => undefined),
@@ -94,7 +93,55 @@ describe("workspace state machine", () => {
     bootstrap.resolve({ connection: connection("starting"), workspace: workspaceWithThread("thread-old") });
     await initialization;
     expect(store.state.connection.phase).toBe("ready");
-    expect(api.request).toHaveBeenCalledWith({ method: "thread/resume", params: { threadId: "thread-old", excludeTurns: false } });
+    expect(api.request).toHaveBeenCalledWith({
+      method: "thread/resume",
+      params: {
+        threadId: "thread-old",
+        excludeTurns: true,
+        initialTurnsPage: { limit: 12, sortDirection: "desc", itemsView: "full" }
+      }
+    });
+  });
+
+  it("loads history in bounded reverse-chronological pages and prepends it in display order", async () => {
+    const api = installApi(Promise.resolve({ connection: connection("ready"), workspace: workspaceWithThread("thread-old") }));
+    api.request.mockImplementation(async (requestValue: { method: string; params?: Record<string, unknown> }) => {
+      if (requestValue.method === "model/list") return { data: [] };
+      if (requestValue.method === "account/read") return { account: null };
+      if (requestValue.method === "account/rateLimits/read") return {};
+      if (requestValue.method === "thread/resume") return {
+        thread: { id: "thread-old" },
+        initialTurnsPage: {
+          data: [
+            { id: "turn-4", status: "completed", items: [{ id: "item-4", type: "agentMessage", text: "four" }] },
+            { id: "turn-3", status: "completed", items: [{ id: "item-3", type: "agentMessage", text: "three" }] }
+          ],
+          nextCursor: "cursor-2"
+        }
+      };
+      if (requestValue.method === "thread/turns/list") return {
+        data: [
+          { id: "turn-2", status: "completed", items: [{ id: "item-2", type: "agentMessage", text: "two" }] },
+          { id: "turn-1", status: "completed", items: [{ id: "item-1", type: "agentMessage", text: "one" }] }
+        ],
+        nextCursor: null
+      };
+      return {};
+    });
+    const store = useWorkspaceStore();
+    await store.initialize();
+    const pane = store.state.panes[0]!;
+
+    expect(pane.items.map((item) => item.id)).toEqual(["item-3", "item-4"]);
+    expect(pane.historyCursor).toBe("cursor-2");
+    await store.loadOlderTurns(pane);
+
+    expect(api.request).toHaveBeenCalledWith({
+      method: "thread/turns/list",
+      params: { threadId: "thread-old", cursor: "cursor-2", limit: 12, sortDirection: "desc", itemsView: "full" }
+    });
+    expect(pane.items.map((item) => item.id)).toEqual(["item-1", "item-2", "item-3", "item-4"]);
+    expect(pane.historyCursor).toBeNull();
   });
 
   it("treats unavailable subscription account data as an API/custom-mode state", async () => {
@@ -109,6 +156,24 @@ describe("workspace state machine", () => {
     expect(store.state.accountLabel).toBe("API/自定义模式");
     expect(store.state.rateLimitLabels).toEqual([]);
     expect(store.state.notices).not.toContain(expect.stringContaining("codex login"));
+  });
+
+  it("passes the active pane working directory to the server-side session filter", async () => {
+    const api = installApi(Promise.resolve({ connection: connection("ready"), workspace: null }));
+    const store = useWorkspaceStore();
+    await store.initialize();
+    await store.loadThreads("性能", "E:\\AI-Workspace");
+
+    expect(api.request).toHaveBeenCalledWith({
+      method: "thread/list",
+      params: {
+        limit: 100,
+        sortKey: "updated_at",
+        sortDirection: "desc",
+        searchTerm: "性能",
+        cwd: "E:\\AI-Workspace"
+      }
+    });
   });
 
   it("recognizes a successful account response that explicitly does not require OpenAI auth", async () => {
@@ -142,22 +207,23 @@ describe("workspace state machine", () => {
     expect(store.state.permissionProfiles).toEqual([{ id: "workspace", description: "Workspace access", allowed: true }]);
   });
 
-  it("adds multiple selected images and enforces the per-pane limit", async () => {
+  it("adds selected files and images through one attachment action and enforces the combined limit", async () => {
     installApi(Promise.resolve({ connection: connection("ready"), workspace: null }));
     const store = useWorkspaceStore();
     await store.initialize();
     const pane = store.state.panes[0]!;
-    vi.mocked(window.codexPane.chooseImage).mockResolvedValueOnce([
-      { id: "image-1", name: "one.png", url: "codex-media://media/image-1", size: 1, kind: "local" },
-      { id: "image-2", name: "two.png", url: "codex-media://media/image-2", size: 1, kind: "local" }
-    ]);
-    await store.chooseImage(pane);
-    expect(window.codexPane.chooseImage).toHaveBeenCalledWith(20);
-    expect(pane.attachments.map((attachment) => attachment.name)).toEqual(["one.png", "two.png"]);
-    pane.attachments = Array.from({ length: 20 }, (_, index) => ({ id: `full-${index}`, name: `${index}.png`, url: `codex-media://media/full-${index}`, size: 1, kind: "local" as const }));
-    await store.chooseImage(pane);
-    expect(window.codexPane.chooseImage).toHaveBeenCalledTimes(1);
-    expect(pane.error).toContain("最多添加 20 张图片");
+    vi.mocked(window.codexPane.chooseAttachments).mockResolvedValueOnce({
+      images: [{ id: "image-1", name: "one.png", url: "codex-media://media/image-1", size: 1, kind: "local" }],
+      files: [{ id: "11111111-1111-4111-8111-111111111111", name: "notes.txt", path: "codex-file://files/11111111-1111-4111-8111-111111111111", managed: true }]
+    });
+    await store.chooseAttachments(pane);
+    expect(window.codexPane.chooseAttachments).toHaveBeenCalledWith(20);
+    expect(pane.attachments.map((attachment) => attachment.name)).toEqual(["one.png"]);
+    expect(pane.references.map((reference) => reference.name)).toEqual(["notes.txt"]);
+    pane.references = Array.from({ length: 19 }, (_, index) => ({ id: crypto.randomUUID(), name: `${index}.txt`, path: `codex-file://files/${index}`, managed: true }));
+    await store.chooseAttachments(pane);
+    expect(window.codexPane.chooseAttachments).toHaveBeenCalledTimes(1);
+    expect(pane.error).toContain("最多添加 20 个附件");
   });
 
   it("sends selected Skills and file references as structured app-server input", async () => {
@@ -176,13 +242,13 @@ describe("workspace state machine", () => {
     const pane = store.state.panes[0]!;
     await store.refreshSkills(pane);
     pane.draft = "@project-verify 检查当前项目";
-    pane.references.push({ id: "11111111-1111-4111-8111-111111111111", name: "README.md", path: "E:\\Work\\README.md" });
+    pane.references.push({ id: "11111111-1111-4111-8111-111111111111", name: "README.md", path: "codex-file://files/11111111-1111-4111-8111-111111111111", managed: true });
     await store.send(pane);
     expect(api.request).toHaveBeenCalledWith(expect.objectContaining({
       method: "turn/start",
       params: expect.objectContaining({ input: expect.arrayContaining([
         { type: "skill", name: "project-verify", path: "E:\\Skills\\project-verify\\SKILL.md" },
-        { type: "mention", name: "README.md", path: "E:\\Work\\README.md" }
+        { type: "managedFile", id: "11111111-1111-4111-8111-111111111111", name: "README.md" }
       ]) })
     }));
     expect(pane.activePermissionProfile).toBe(":workspace");
@@ -357,6 +423,32 @@ describe("workspace state machine", () => {
     await store.initialize();
     api.emitProtocol({ generation: 1, kind: "notification", payload: { method: "turn/started", params: { threadId: "thread-old", turn: { id: "stale-turn" } } } });
     expect(store.state.panes[0]!.activeTurnId).toBeNull();
+  });
+
+  it("validates each nested event generation instead of dropping a mixed outer batch", async () => {
+    const api = installApi(Promise.resolve({ connection: connection("ready", 2), workspace: workspaceWithThread("thread-old") }));
+    const store = useWorkspaceStore();
+    await store.initialize();
+    api.emitProtocol({
+      generation: 1,
+      kind: "notification-batch",
+      payload: [
+        { generation: 1, kind: "notification", payload: { method: "thread/name/updated", params: { threadId: "thread-old", threadName: "旧名称" } } },
+        { generation: 2, kind: "notification", payload: { method: "thread/name/updated", params: { threadId: "thread-old", threadName: "当前名称" } } }
+      ]
+    });
+    expect(store.state.panes[0]!.title).toBe("当前名称");
+  });
+
+  it("keeps image-view tool items and their running and completed states", async () => {
+    const api = installApi(Promise.resolve({ connection: connection("ready", 2), workspace: workspaceWithThread("thread-image") }));
+    const store = useWorkspaceStore();
+    await store.initialize();
+    store.state.panes[0]!.threadId = "thread-image";
+    api.emitProtocol({ generation: 2, kind: "notification", payload: { method: "item/started", params: { threadId: "thread-image", turnId: "turn-image", item: { id: "view-image", type: "imageView", path: "E:\\Work\\image.png" } } } });
+    expect(store.state.panes[0]!.items.at(-1)).toMatchObject({ type: "imageView", status: "running", data: { path: "E:\\Work\\image.png" } });
+    api.emitProtocol({ generation: 2, kind: "notification", payload: { method: "item/completed", params: { threadId: "thread-image", turnId: "turn-image", item: { id: "view-image", type: "imageView", path: "E:\\Work\\image.png" } } } });
+    expect(store.state.panes[0]!.items.at(-1)).toMatchObject({ type: "imageView", status: "completed" });
   });
 
   it("routes interleaved deltas with identical item ids by thread and pane", async () => {

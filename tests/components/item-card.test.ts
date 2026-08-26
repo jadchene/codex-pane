@@ -224,5 +224,7 @@ describe("ItemCard compact structured views", () => {
     await nextTick();
     expect(importImagePath).toHaveBeenCalledWith("C:\\safe.png");
     expect(viewed.get("img").attributes("src")).toBe("codex-media://media/test");
+    expect(viewed.text()).toContain("已完成");
+    expect(viewed.text()).toContain("C:\\safe.png");
   });
 });

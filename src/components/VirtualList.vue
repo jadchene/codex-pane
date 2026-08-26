@@ -1,0 +1,208 @@
+<script setup lang="ts" generic="TItem">
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+
+const props = withDefaults(defineProps<{
+  items: TItem[];
+  itemKey: (item: TItem) => string;
+  estimateSize?: (item: TItem) => number;
+  minItemSize?: number;
+  buffer?: number;
+  followTail?: boolean;
+}>(), { minItemSize: 56, buffer: 160 });
+const emit = defineEmits<{ scroll: [event: Event] }>();
+defineSlots<{ default: (props: { item: TItem; index: number }) => unknown; before?: () => unknown; empty?: () => unknown }>();
+
+class FenwickTree {
+  readonly values: number[];
+  readonly tree: number[];
+
+  constructor(values: number[]) {
+    this.values = [...values];
+    this.tree = Array(values.length + 1).fill(0);
+    values.forEach((value, index) => {
+      const cursor = index + 1;
+      this.tree[cursor] = (this.tree[cursor] ?? 0) + value;
+      const parent = cursor + (cursor & -cursor);
+      if (parent < this.tree.length) this.tree[parent] = (this.tree[parent] ?? 0) + (this.tree[cursor] ?? 0);
+    });
+  }
+
+  add(index: number, delta: number): void {
+    this.values[index] = (this.values[index] ?? 0) + delta;
+    for (let cursor = index + 1; cursor < this.tree.length; cursor += cursor & -cursor) this.tree[cursor] = (this.tree[cursor] ?? 0) + delta;
+  }
+
+  prefix(count: number): number {
+    let result = 0;
+    for (let cursor = Math.min(count, this.values.length); cursor > 0; cursor -= cursor & -cursor) result += this.tree[cursor] ?? 0;
+    return result;
+  }
+
+  total(): number {
+    return this.prefix(this.values.length);
+  }
+
+  indexAt(offset: number): number {
+    if (!this.values.length) return 0;
+    let index = 0;
+    let sum = 0;
+    let step = 1;
+    while (step * 2 <= this.values.length) step *= 2;
+    for (; step > 0; step = Math.floor(step / 2)) {
+      const next = index + step;
+      if (next <= this.values.length && sum + (this.tree[next] ?? 0) <= offset) {
+        index = next;
+        sum += this.tree[next] ?? 0;
+      }
+    }
+    return Math.min(index, this.values.length - 1);
+  }
+}
+
+const scroller = ref<HTMLElement | null>(null);
+const startIndex = ref(0);
+const endIndex = ref(0);
+const topSpacer = ref(0);
+const bottomSpacer = ref(0);
+const measuredSizes = new Map<string, number>();
+let keyIndexes = new Map<string, number>();
+let sizes = new FenwickTree([]);
+let rangeFrame: number | null = null;
+let rowObserver: ResizeObserver | null = null;
+let widthObserver: ResizeObserver | null = null;
+let observedWidth = 0;
+let currentAnchorKey: string | null = null;
+const observedRows = new Map<string, Element>();
+
+const visibleItems = computed(() => props.items.slice(startIndex.value, endIndex.value));
+const estimatedSize = (item: TItem): number => Math.max(props.minItemSize, props.estimateSize?.(item) ?? props.minItemSize);
+const updateRange = (): void => {
+  rangeFrame = null;
+  const element = scroller.value;
+  if (!element || !props.items.length) {
+    startIndex.value = 0;
+    endIndex.value = 0;
+    topSpacer.value = 0;
+    bottomSpacer.value = 0;
+    return;
+  }
+  const viewportTop = props.followTail ? Math.max(0, sizes.total() - element.clientHeight) : element.scrollTop;
+  const start = sizes.indexAt(Math.max(0, viewportTop - props.buffer));
+  const end = props.followTail
+    ? props.items.length
+    : Math.min(props.items.length, sizes.indexAt(element.scrollTop + element.clientHeight + props.buffer) + 1);
+  startIndex.value = start;
+  endIndex.value = Math.max(start + 1, end);
+  currentAnchorKey = props.itemKey(props.items[start]!);
+  topSpacer.value = sizes.prefix(start);
+  bottomSpacer.value = Math.max(0, sizes.total() - sizes.prefix(endIndex.value));
+};
+const scheduleRangeUpdate = (): void => {
+  if (rangeFrame === null) rangeFrame = requestAnimationFrame(updateRange);
+};
+const rebuild = async (): Promise<void> => {
+  const element = scroller.value;
+  const anchorKey = props.followTail ? null : currentAnchorKey;
+  const anchorOffset = element ? element.scrollTop - sizes.prefix(startIndex.value) : 0;
+  keyIndexes = new Map(props.items.map((item, index) => [props.itemKey(item), index]));
+  for (const key of measuredSizes.keys()) {
+    if (!keyIndexes.has(key)) measuredSizes.delete(key);
+  }
+  sizes = new FenwickTree(props.items.map((item) => measuredSizes.get(props.itemKey(item)) ?? estimatedSize(item)));
+  if (element && props.followTail) {
+    element.scrollTop = sizes.total();
+  } else if (element && anchorKey) {
+    const nextAnchorIndex = keyIndexes.get(anchorKey);
+    if (nextAnchorIndex !== undefined) element.scrollTop = Math.max(0, sizes.prefix(nextAnchorIndex) + anchorOffset);
+  }
+  updateRange();
+  await nextTick();
+  scheduleRangeUpdate();
+};
+const observeRow = (element: Element | null, item: TItem): void => {
+  if (!rowObserver) return;
+  const key = props.itemKey(item);
+  const previous = observedRows.get(key);
+  if (!(element instanceof HTMLElement)) {
+    if (previous) rowObserver.unobserve(previous);
+    observedRows.delete(key);
+    return;
+  }
+  if (previous && previous !== element) rowObserver.unobserve(previous);
+  element.dataset.virtualKey = key;
+  observedRows.set(key, element);
+  rowObserver.observe(element);
+};
+const handleScroll = (event: Event): void => {
+  scheduleRangeUpdate();
+  emit("scroll", event);
+};
+const scrollToBottom = (): void => {
+  if (!scroller.value) return;
+  scroller.value.scrollTop = sizes.total();
+  scheduleRangeUpdate();
+};
+const scrollToPosition = (position: number): void => {
+  if (!scroller.value) return;
+  scroller.value.scrollTop = Math.max(0, position);
+  scheduleRangeUpdate();
+};
+
+watch(() => [props.items, props.items.length, props.items[0] ? props.itemKey(props.items[0]) : null, props.items.at(-1) ? props.itemKey(props.items.at(-1)!) : null] as const, rebuild);
+onMounted(() => {
+  if (typeof ResizeObserver === "undefined") {
+    void rebuild();
+    return;
+  }
+  rowObserver = new ResizeObserver((entries) => {
+    const element = scroller.value;
+    for (const entry of entries) {
+      const key = (entry.target as HTMLElement).dataset.virtualKey;
+      if (!key) continue;
+      const index = keyIndexes.get(key);
+      if (index === undefined || props.itemKey(props.items[index]!) !== key) continue;
+      const nextSize = Math.max(props.minItemSize, Math.ceil(entry.borderBoxSize[0]?.blockSize ?? entry.contentRect.height));
+      const previousSize = sizes.values[index] ?? estimatedSize(props.items[index]!);
+      if (nextSize === previousSize) continue;
+      measuredSizes.set(key, nextSize);
+      sizes.add(index, nextSize - previousSize);
+      if (element && props.followTail) element.scrollTop = sizes.total();
+      else if (element && index < sizes.indexAt(element.scrollTop)) element.scrollTop += nextSize - previousSize;
+    }
+    scheduleRangeUpdate();
+  });
+  widthObserver = new ResizeObserver((entries) => {
+    const width = Math.round(entries[0]?.contentRect.width ?? 0);
+    if (!width || width === observedWidth) return;
+    if (observedWidth) measuredSizes.clear();
+    observedWidth = width;
+    void rebuild();
+  });
+  if (scroller.value) widthObserver.observe(scroller.value);
+  void rebuild();
+});
+onBeforeUnmount(() => {
+  if (rangeFrame !== null) cancelAnimationFrame(rangeFrame);
+  rowObserver?.disconnect();
+  widthObserver?.disconnect();
+  observedRows.clear();
+});
+defineExpose({ scrollToBottom, scrollToPosition });
+</script>
+
+<template>
+  <div ref="scroller" :data-total-items="items.length" @scroll.passive="handleScroll">
+    <div v-if="$slots.before" class="virtual-list-overlay"><slot name="before" /></div>
+    <slot v-if="!items.length" name="empty" />
+    <div class="virtual-list-spacer" :style="{ height: `${topSpacer}px` }" />
+    <div v-for="(item, offset) in visibleItems" :key="itemKey(item)" :ref="element => observeRow(element as Element | null, item)">
+      <slot :item="item" :index="startIndex + offset" />
+    </div>
+    <div class="virtual-list-spacer" :style="{ height: `${bottomSpacer}px` }" />
+  </div>
+</template>
+
+<style scoped>
+.virtual-list-overlay { position: sticky; top: 0; z-index: 2; height: 0; overflow: visible; }
+.virtual-list-spacer { flex: 0 0 auto; width: 1px; pointer-events: none; }
+</style>

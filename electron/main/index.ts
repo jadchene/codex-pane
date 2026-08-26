@@ -1,12 +1,13 @@
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, extname, join, resolve } from "node:path";
 import { existsSync, mkdirSync, readFileSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { app, BrowserWindow, dialog, ipcMain, protocol, safeStorage, shell } from "electron";
+import { app, BrowserWindow, clipboard, dialog, ipcMain, protocol, safeStorage, shell } from "electron";
 import { AppServerSupervisor } from "./app-server-supervisor.js";
+import { FileStore } from "./file-store.js";
 import { MediaStore } from "./media-store.js";
 import { StateStore, type WorkspaceState } from "./persistence.js";
-import { safeRequestSchema, serverResponseSchema } from "../shared/contracts.js";
+import { safeRequestSchema, serverResponseSchema, type AttachmentBatch, type ProtocolEvent } from "../shared/contracts.js";
 import { RuntimeProtocolValidator } from "../../packages/protocol/src/runtime-validator.js";
 import { DiagnosticLog } from "./diagnostic-log.js";
 import { useCodexArgsPrefixForTests, useCodexFixtureForTests } from "./codex-process.js";
@@ -16,8 +17,13 @@ protocol.registerSchemesAsPrivileged([
   { scheme: "codex-media", privileges: { secure: true, standard: true, supportFetchAPI: true } }
 ]);
 
+if (!app.isPackaged && process.env.CODEX_PANE_PERFORMANCE_FIXTURE === "1") app.disableHardwareAcceleration();
+
 if (!app.isPackaged && existsSync(join(app.getAppPath(), ".approval-fixture"))) {
   useCodexFixtureForTests(join(app.getAppPath(), "tests", "fixtures", "fake-codex", "fake-app-server.mjs"));
+}
+if (!app.isPackaged && process.env.CODEX_PANE_PERFORMANCE_FIXTURE === "1") {
+  useCodexFixtureForTests(join(app.getAppPath(), "tests", "fixtures", "fake-codex", "performance-app-server.mjs"));
 }
 if (!app.isPackaged && existsSync(join(app.getAppPath(), ".user-approval-fixture"))) {
   useCodexArgsPrefixForTests(["-c", "approvals_reviewer='user'"]);
@@ -83,6 +89,7 @@ let mainWindow: BrowserWindow | null = null;
 const fallbackAppServerWorkingDirectory = app.isPackaged ? dirname(app.getPath("exe")) : app.getAppPath();
 const supervisor = new AppServerSupervisor(fallbackAppServerWorkingDirectory);
 let mediaStore: MediaStore;
+let fileStore: FileStore;
 let stateStore: StateStore;
 let diagnosticLog: DiagnosticLog;
 let forceClosing = false;
@@ -138,9 +145,9 @@ const scheduleWindowStateSave = (): void => {
   }, 300);
 };
 
-const transformManagedImages = (value: unknown): unknown => {
+const transformManagedAttachments = (value: unknown): unknown => {
   if (Array.isArray(value)) {
-    return value.map(transformManagedImages);
+    return value.map(transformManagedAttachments);
   }
   if (!value || typeof value !== "object") {
     return value;
@@ -156,7 +163,31 @@ const transformManagedImages = (value: unknown): unknown => {
     }
     return { type: "image", url: url.toString(), detail: record.detail ?? "high" };
   }
-  return Object.fromEntries(Object.entries(record).map(([key, entry]) => [key, transformManagedImages(entry)]));
+  if (record.type === "managedFile" && typeof record.id === "string" && typeof record.name === "string") {
+    return { type: "mention", name: record.name, path: fileStore.resolveAttachment(record.id, record.name) };
+  }
+  return Object.fromEntries(Object.entries(record).map(([key, entry]) => [key, transformManagedAttachments(entry)]));
+};
+
+const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"]);
+const importAttachmentPaths = async (paths: string[]): Promise<AttachmentBatch> => {
+  const images = [];
+  const files = [];
+  for (const path of paths) {
+    if (IMAGE_EXTENSIONS.has(extname(path).toLocaleLowerCase())) images.push(await mediaStore.importPath(path));
+    else files.push(await fileStore.importPath(path));
+  }
+  return { images, files };
+};
+
+const clipboardFilePaths = (): string[] => {
+  const paths = clipboard.availableFormats().flatMap((format) => {
+    if (!/^filenamew?$/i.test(format)) return [];
+    const buffer = clipboard.readBuffer(format);
+    const value = buffer.toString(/w$/i.test(format) ? "utf16le" : "utf8");
+    return value.split("\0").map((path) => path.trim()).filter(Boolean);
+  });
+  return [...new Set(paths)].filter((path) => existsSync(path) && statSync(path).isFile());
 };
 
 const protectRemoteUrls = (value: unknown): unknown => {
@@ -305,7 +336,7 @@ const registerIpc = (): void => {
   ipcMain.handle("codex:request", async (event, rawRequest: unknown) => {
     assertTrustedSender(event);
     const request = safeRequestSchema.parse(rawRequest);
-    return supervisor.call(request.method, transformManagedImages(request.params));
+    return supervisor.call(request.method, transformManagedAttachments(request.params));
   });
   ipcMain.handle("codex:respond", async (event, rawResponse: unknown) => {
     assertTrustedSender(event);
@@ -329,25 +360,25 @@ const registerIpc = (): void => {
     const result = await dialog.showOpenDialog(mainWindow!, { title: "选择 Codex 工作目录", properties: ["openDirectory"] });
     return result.canceled ? null : result.filePaths[0] ?? null;
   });
-  ipcMain.handle("media:choose", async (event, rawLimit: unknown) => {
+  ipcMain.handle("attachment:choose", async (event, rawLimit: unknown) => {
     assertTrustedSender(event);
-    if (!Number.isInteger(rawLimit) || Number(rawLimit) < 1 || Number(rawLimit) > 20) throw new Error("可添加图片数量无效。");
+    if (!Number.isInteger(rawLimit) || Number(rawLimit) < 1 || Number(rawLimit) > 20) throw new Error("可添加附件数量无效。");
     const result = await dialog.showOpenDialog(mainWindow!, {
-      title: "添加图片（可多选）",
-      properties: ["openFile", "multiSelections"],
-      filters: [{ name: "图片", extensions: ["png", "jpg", "jpeg", "webp", "gif", "bmp"] }]
+      title: "添加附件（可多选）",
+      properties: ["openFile", "multiSelections"]
     });
-    if (result.canceled) return [];
-    return Promise.all(result.filePaths.slice(0, Number(rawLimit)).map((path) => mediaStore.importPath(path)));
+    if (result.canceled) return { images: [], files: [] };
+    return importAttachmentPaths(result.filePaths.slice(0, Number(rawLimit)));
   });
-  ipcMain.handle("file:choose", async (event, rawLimit: unknown) => {
+  ipcMain.handle("attachment:paste", async (event, rawPaths: unknown, rawLimit: unknown) => {
     assertTrustedSender(event);
-    if (!Number.isInteger(rawLimit) || Number(rawLimit) < 1 || Number(rawLimit) > 20) throw new Error("可添加文件数量无效。");
-    const result = await dialog.showOpenDialog(mainWindow!, { title: "添加文件（可多选）", properties: ["openFile", "multiSelections"] });
-    if (result.canceled) return [];
-    return result.filePaths.slice(0, Number(rawLimit)).map((path) => ({ id: crypto.randomUUID(), name: basename(path), path }));
+    if (!Array.isArray(rawPaths) || rawPaths.length > 20 || rawPaths.some((path) => typeof path !== "string" || path.length > 32_768)) throw new Error("剪贴板文件路径无效。");
+    if (!Number.isInteger(rawLimit) || Number(rawLimit) < 1 || Number(rawLimit) > 20) throw new Error("可添加附件数量无效。");
+    const suggestedPaths = rawPaths.map((path) => resolve(path)).filter((path) => existsSync(path) && statSync(path).isFile());
+    const paths = (suggestedPaths.length ? suggestedPaths : clipboardFilePaths()).slice(0, Number(rawLimit));
+    if (paths.length) return importAttachmentPaths(paths);
+    return { images: [await mediaStore.pasteClipboard()], files: [] };
   });
-  ipcMain.handle("media:clipboard", (event) => { assertTrustedSender(event); return mediaStore.pasteClipboard(); });
   ipcMain.handle("media:path", (event, path: unknown) => {
     assertTrustedSender(event);
     if (typeof path !== "string" || path.length > 32_768) {
@@ -434,16 +465,63 @@ const registerIpc = (): void => {
   ipcMain.handle("diagnostics:read", (event) => { assertTrustedSender(event); return diagnosticLog.tail(); });
 };
 
-supervisor.on("state", (state) => mainWindow?.webContents.send("codex:state", state));
+const pendingDeltaEvents = new Map<string, ProtocolEvent>();
+let deltaBatchTimer: NodeJS.Timeout | null = null;
+const flushDeltaEvents = (): void => {
+  if (deltaBatchTimer) clearTimeout(deltaBatchTimer);
+  deltaBatchTimer = null;
+  if (!pendingDeltaEvents.size) return;
+  const events = [...pendingDeltaEvents.values()];
+  pendingDeltaEvents.clear();
+  const generations = new Map<number, ProtocolEvent[]>();
+  for (const event of events) {
+    const generationEvents = generations.get(event.generation) ?? [];
+    generationEvents.push(event);
+    generations.set(event.generation, generationEvents);
+  }
+  for (const [generation, generationEvents] of generations) {
+    mainWindow?.webContents.send("codex:event", { generation, kind: "notification-batch", payload: generationEvents });
+  }
+};
+const bufferDeltaEvent = (event: ProtocolEvent): boolean => {
+  if (event.kind !== "notification") return false;
+  const envelope = event.payload && typeof event.payload === "object" ? event.payload as Record<string, unknown> : {};
+  const method = typeof envelope.method === "string" ? envelope.method : "";
+  if (!method.includes("/delta") && !method.endsWith("outputDelta")) return false;
+  const params = envelope.params && typeof envelope.params === "object" ? envelope.params as Record<string, unknown> : {};
+  const field = typeof params.delta === "string" ? "delta" : typeof params.output === "string" ? "output" : null;
+  if (!field) return false;
+  const key = [event.generation, method, params.threadId, params.turnId, params.itemId].map(String).join(":");
+  const previous = pendingDeltaEvents.get(key);
+  if (previous) {
+    const previousEnvelope = previous.payload as Record<string, unknown>;
+    const previousParams = previousEnvelope.params as Record<string, unknown>;
+    previousParams[field] = `${typeof previousParams[field] === "string" ? previousParams[field] : ""}${typeof params[field] === "string" ? params[field] : ""}`;
+  } else {
+    pendingDeltaEvents.set(key, { ...event, payload: { ...envelope, params: { ...params } } });
+  }
+  if (!deltaBatchTimer) deltaBatchTimer = setTimeout(flushDeltaEvents, 0);
+  return true;
+};
+supervisor.on("state", (state) => {
+  if (pendingDeltaEvents.size) flushDeltaEvents();
+  mainWindow?.webContents.send("codex:state", state);
+});
 supervisor.on("protocol", (event) => {
+  if (event.kind === "diagnostic") {
+    void diagnosticLog?.write(event.payload).catch(() => undefined);
+    return;
+  }
+  if (bufferDeltaEvent(event)) return;
+  if (event.kind === "notification" && pendingDeltaEvents.size) flushDeltaEvents();
   mainWindow?.webContents.send("codex:event", event);
-  if (event.kind === "diagnostic") void diagnosticLog?.write(event.payload).catch(() => undefined);
 });
 
 app.whenReady().then(async () => {
   const dataDirectory = app.getPath("userData");
   mediaStore = new MediaStore(join(dataDirectory, "media"));
-  await mediaStore.initialize();
+  fileStore = new FileStore(join(dataDirectory, "files"));
+  await Promise.all([mediaStore.initialize(), fileStore.initialize()]);
   stateStore = new StateStore(join(dataDirectory, "workspaces", "default.json"));
   const persistedWorkspace = await stateStore.load();
   const initialWorkingDirectory = persistedWorkspace?.defaultCwd || fallbackAppServerWorkingDirectory;

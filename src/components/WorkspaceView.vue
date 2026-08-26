@@ -35,7 +35,9 @@ const moveFocus = (event: KeyboardEvent): void => {
     : layout === "vertical" ? { columns: 2, rows: 1 }
       : layout === "horizontal" ? { columns: 1, rows: 2 }
         : layout === "quad" ? { columns: 2, rows: 2 }
-          : { columns: 3, rows: 2 };
+          : layout === "fourColumns" ? { columns: 4, rows: 1 }
+            : layout === "fourRows" ? { columns: 1, rows: 4 }
+              : { columns: 3, rows: 2 };
   const current = Math.max(0, store.state.panes.findIndex((pane) => pane.id === store.state.focusedPaneId));
   const row = Math.floor(current / dimensions.columns);
   const column = current % dimensions.columns;
@@ -60,6 +62,14 @@ defineExpose({ focusPaneById });
     <Splitpanes v-else-if="store.state.layout === 'horizontal'" horizontal class="codex-split" @resized="captureSizes('horizontal', $event)">
       <Pane :size="size('horizontal', 0)"><PaneHost :ref="instance => setPaneHost(0, instance)" :index="0" @open-sessions="emit('openSessions', $event)" /></Pane>
       <Pane :size="size('horizontal', 1)"><PaneHost :ref="instance => setPaneHost(1, instance)" :index="1" @open-sessions="emit('openSessions', $event)" /></Pane>
+    </Splitpanes>
+
+    <Splitpanes v-else-if="store.state.layout === 'fourColumns'" class="codex-split" @resized="captureSizes('fourColumns', $event)">
+      <Pane v-for="index in 4" :key="`four-column-${index}`" :size="size('fourColumns', index - 1, 4)"><PaneHost :ref="instance => setPaneHost(index - 1, instance)" :index="index - 1" @open-sessions="emit('openSessions', $event)" /></Pane>
+    </Splitpanes>
+
+    <Splitpanes v-else-if="store.state.layout === 'fourRows'" horizontal class="codex-split" @resized="captureSizes('fourRows', $event)">
+      <Pane v-for="index in 4" :key="`four-row-${index}`" :size="size('fourRows', index - 1, 4)"><PaneHost :ref="instance => setPaneHost(index - 1, instance)" :index="index - 1" @open-sessions="emit('openSessions', $event)" /></Pane>
     </Splitpanes>
 
     <Splitpanes v-else-if="store.state.layout === 'quad'" horizontal class="codex-split" @resized="captureSizes('quadRows', $event)">

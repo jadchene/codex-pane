@@ -101,12 +101,13 @@ test("starts the desktop workbench and connects to Codex", async () => {
     expect(chromeMetrics).toMatchObject({ documentOverflow: 0, bodyOverflow: 0, shellOverflow: 0, shellOverflowStyle: "hidden" });
     expect(chromeMetrics.buttonCenterOffset).toBeLessThanOrEqual(0.5);
     expect(chromeMetrics.glyphCenterOffset).toBeLessThanOrEqual(0.5);
-    await selectLayout(window, "六窗格");
+    await selectLayout(window, "六宫格");
     await expect(window.locator(".pane")).toHaveCount(6);
     const secondModelSelect = window.locator("[data-pane-id='pane-2'] .model-select");
     const secondComposer = window.locator("[data-pane-id='pane-2'] textarea");
     await secondModelSelect.click();
     await expect(window.locator(".n-base-select-menu")).toBeVisible();
+    expect(Number.parseFloat(await window.locator(".n-base-select-menu").evaluate((element) => getComputedStyle(element).borderTopWidth))).toBeGreaterThanOrEqual(0.7);
     await expect(secondComposer).not.toBeFocused();
     await window.keyboard.press("Escape");
     await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setSize(960, 680));
@@ -118,10 +119,29 @@ test("starts the desktop workbench and connects to Codex", async () => {
     expect(Number.parseFloat(await narrowStatus.evaluate((element) => getComputedStyle(element).fontSize))).toBeGreaterThanOrEqual(12);
     expect(Number.parseFloat(await window.locator(".cwd-text").first().evaluate((element) => getComputedStyle(element).fontSize))).toBeGreaterThanOrEqual(12);
     await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setSize(1480, 920));
-    await selectLayout(window, "四方格");
+    await selectLayout(window, "横向四栏");
+    await expect(window.locator(".pane")).toHaveCount(4);
+    const columnBoxes = await window.locator(".pane").evaluateAll((elements) => elements.map((element) => {
+      const box = element.getBoundingClientRect();
+      return { left: box.left, top: box.top };
+    }));
+    expect(Math.max(...columnBoxes.map((box) => box.top)) - Math.min(...columnBoxes.map((box) => box.top))).toBeLessThanOrEqual(2);
+    expect(new Set(columnBoxes.map((box) => Math.round(box.left))).size).toBe(4);
+    expect(columnBoxes.map((box) => box.left)).toEqual([...columnBoxes.map((box) => box.left)].sort((left, right) => left - right));
+    await selectLayout(window, "纵向四栏");
+    await expect(window.locator(".pane")).toHaveCount(4);
+    const rowBoxes = await window.locator(".pane").evaluateAll((elements) => elements.map((element) => {
+      const box = element.getBoundingClientRect();
+      return { left: box.left, top: box.top };
+    }));
+    expect(Math.max(...rowBoxes.map((box) => box.left)) - Math.min(...rowBoxes.map((box) => box.left))).toBeLessThanOrEqual(2);
+    expect(new Set(rowBoxes.map((box) => Math.round(box.top))).size).toBe(4);
+    expect(rowBoxes.map((box) => box.top)).toEqual([...rowBoxes.map((box) => box.top)].sort((top, bottom) => top - bottom));
+    await selectLayout(window, "四宫格");
     await expect(window.locator(".pane")).toHaveCount(4);
     await expect(window.getByPlaceholder(/发送消息/)).toHaveCount(4);
     const firstComposer = window.getByPlaceholder(/发送消息/).first();
+    expect(await firstComposer.evaluate((element) => (element as HTMLTextAreaElement).spellcheck)).toBe(false);
     const composerSurface = window.locator("[data-pane-id='pane-1'] .n-input");
     const composerBackgroundBeforeFocus = await composerSurface.evaluate((element) => getComputedStyle(element).backgroundColor);
     await firstComposer.focus();
@@ -148,22 +168,20 @@ test("starts the desktop workbench and connects to Codex", async () => {
     await firstComposer.fill("/");
     await expect(window.getByText("/new  新建会话", { exact: true })).toBeVisible();
     await firstComposer.fill("");
-    await firstComposer.evaluate((element) => {
-      const clipboardData = new DataTransfer();
-      clipboardData.setData("text/plain", "https://example.com/codex-pane-test.png?token=source-smoke-secret");
-      element.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData }));
-    });
-    await expect(window.getByText("codex-pane-test.png", { exact: true })).toBeVisible();
+    await application.evaluate(({ clipboard }) => clipboard.writeText("https://example.com/codex-pane-test.png"));
+    await firstComposer.focus();
+    await window.keyboard.press("Control+V");
+    await expect(firstComposer).toHaveValue("https://example.com/codex-pane-test.png");
+    await expect(window.getByText("codex-pane-test.png", { exact: true })).toHaveCount(0);
     const userDataPath = await application.evaluate(({ app }) => app.getPath("userData"));
-    await window.waitForTimeout(700);
-    const protectedWorkspace = await readFile(resolve(userDataPath, "workspaces/default.json"), "utf8");
-    expect(protectedWorkspace).not.toContain("source-smoke-secret");
-    expect(protectedWorkspace).toContain("protectedSourceUrl");
-    await window.getByRole("button", { name: /移除 codex-pane-test\.png/ }).click();
+    await firstComposer.fill("");
     await firstComposer.fill("/resume");
     await firstComposer.press("Enter");
     await expect(window.getByText("恢复会话", { exact: true })).toBeVisible();
     await expect(window.getByPlaceholder("按标题或内容搜索历史会话")).toBeVisible();
+    await expect(window.getByRole("button", { name: "仅当前目录" })).toBeVisible();
+    await expect(window.getByRole("button", { name: "仅当前目录" })).toBeDisabled();
+    await expect(window.getByText("所有工作目录", { exact: true })).toBeVisible();
     const sessionPage = window.locator("[data-pane-id='pane-1'] .session-pane-page");
     await expect(sessionPage).toBeVisible();
     const paneBox = await window.locator("[data-pane-id='pane-1']").boundingBox();
@@ -182,10 +200,16 @@ test("starts the desktop workbench and connects to Codex", async () => {
     await expect(window.getByText("设置", { exact: true })).toBeVisible();
     await expect(window.getByText("默认模型", { exact: true })).toBeVisible();
     await expect(window.getByText("权限配置", { exact: true })).toBeVisible();
+    await expect(window.getByText("PowerShell 7 路径", { exact: true })).toBeVisible();
+    await expect(window.getByText(/新会话默认使用这里的目录/)).toHaveCount(0);
+    await expect(window.getByText(/这些值由本机 Codex 决定/)).toHaveCount(0);
     const fontReadback = window.getByText(/已读取 \d+ 个字体系列/);
     await expect(fontReadback).toBeVisible();
     expect(Number((await fontReadback.textContent())?.match(/\d+/)?.[0] ?? 0)).toBeGreaterThan(0);
     const settingsDialog = window.getByRole("dialog").filter({ hasText: "Codex 运行环境" });
+    const settingsControlBorders = await settingsDialog.locator(".n-input__state-border, .n-base-selection__state-border, .n-color-picker").evaluateAll((elements) => elements.map((element) => Number.parseFloat(getComputedStyle(element).borderTopWidth)));
+    expect(settingsControlBorders.length).toBeGreaterThanOrEqual(4);
+    expect(settingsControlBorders.every((width) => width >= 0.7)).toBe(true);
     const settingsBox = await settingsDialog.boundingBox();
     expect(settingsBox?.height ?? 1000).toBeLessThanOrEqual(720);
     expect((await window.evaluate(() => innerHeight)) - (settingsBox?.height ?? 0)).toBeGreaterThanOrEqual(90);
@@ -194,7 +218,7 @@ test("starts the desktop workbench and connects to Codex", async () => {
     await selectLayout(window, "单窗格");
     await expect(window.locator(".pane")).toHaveCount(1);
     expect(await window.locator(".pane").evaluate((element) => getComputedStyle(element, "::after").display)).toBe("none");
-    await selectLayout(window, "四方格");
+    await selectLayout(window, "四宫格");
     await expect(window.locator(".pane")).toHaveCount(4);
     if (process.env.CODEX_PANE_SCREENSHOT_PATH) {
       await window.screenshot({ path: process.env.CODEX_PANE_SCREENSHOT_PATH, fullPage: true });
@@ -253,12 +277,10 @@ test("completes a real Codex turn", async () => {
     await expect(window.getByText(/Working/)).toHaveCount(0, { timeout: 20_000 });
 
     const imagePath = resolve("node_modules/app-builder-lib/templates/icons/electron-linux/64x64.png");
-    await composer.evaluate((element, path) => {
-      const clipboardData = new DataTransfer();
-      clipboardData.setData("text/plain", path);
-      element.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData }));
-    }, imagePath);
-    await expect(window.getByText("64x64.png", { exact: true })).toBeVisible();
+    await application.evaluate(({ clipboard, nativeImage }, path) => clipboard.writeImage(nativeImage.createFromPath(path)), imagePath);
+    await composer.focus();
+    await window.keyboard.press("Control+V");
+    await expect(window.getByText("剪贴板图片.png", { exact: true })).toBeVisible();
     await composer.fill("只回复“图片附件联调成功”，不要调用任何工具。" );
     await composer.press("Enter");
     await expect(window.locator(".message-agent")).toHaveCount(initialAgentMessageCount + 2, { timeout: 90_000 });
@@ -299,7 +321,7 @@ test("routes four concurrent Codex turns to their own panes", async () => {
   try {
     const window = await application.firstWindow();
     await expect(window.getByRole("button", { name: "切换窗格布局" })).toBeVisible({ timeout: 20_000 });
-    await selectLayout(window, "四方格");
+    await selectLayout(window, "四宫格");
     const panes = window.locator(".pane");
     await expect(panes).toHaveCount(4);
     for (let index = 0; index < 4; index += 1) {

@@ -23,7 +23,7 @@ const paneSchema = z.object({
   cwd: z.string(),
   draft: z.string().max(200_000),
   attachments: z.array(attachmentSchema).max(20),
-  references: z.array(z.object({ id: z.string().uuid(), name: z.string().min(1).max(512), path: z.string().min(1).max(32_768) })).max(20).default([]),
+  references: z.array(z.object({ id: z.string().uuid(), name: z.string().min(1).max(512), path: z.string().min(1).max(32_768), managed: z.boolean().optional() })).max(20).default([]),
   model: z.string().nullable(),
   effort: z.string().nullable(),
   scrollTop: z.number().nonnegative().default(0),
@@ -32,8 +32,8 @@ const paneSchema = z.object({
 
 export const workspaceStateSchema = z.object({
   version: z.literal(1),
-  layout: z.enum(["single", "vertical", "horizontal", "quad", "six"]),
-  splitSizes: z.record(z.array(z.number().min(10).max(90)).min(2).max(3)).default({}),
+  layout: z.enum(["single", "vertical", "horizontal", "quad", "fourColumns", "fourRows", "six"]),
+  splitSizes: z.record(z.array(z.number().min(10).max(90)).min(2).max(4)).default({}),
   defaultCwd: z.string().max(32_768).default(""),
   appearance: z.object({
     theme: z.enum(["dark", "light"]).default("dark"),

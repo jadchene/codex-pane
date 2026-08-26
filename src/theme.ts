@@ -2,8 +2,8 @@ import type { CSSProperties } from "vue";
 import type { GlobalThemeOverrides } from "naive-ui";
 import type { AppearanceSettings } from "./types";
 
-const darkPalette = { background: "#000000", surface: "#050505", raised: "#0b0b0b", border: "#242424", text: "#ffffff", muted: "#a3a3a3", diffAdd: "#213a2b", diffDelete: "#4a221d", diffAddGutter: "#213a2b", diffDeleteGutter: "#4a221d", diffGutterText: "#8b949e", diffAddText: "#3fb950", diffDeleteText: "#f85149" };
-const lightPalette = { background: "#ffffff", surface: "#ffffff", raised: "#f6f6f6", border: "#d9d9d9", text: "#111111", muted: "#666666", diffAdd: "#dafbe1", diffDelete: "#ffebe9", diffAddGutter: "#aceebb", diffDeleteGutter: "#ffcecb", diffGutterText: "#1f2328", diffAddText: "#116329", diffDeleteText: "#82071e" };
+const darkPalette = { background: "#000000", surface: "#050505", raised: "#0b0b0b", border: "#242424", controlBorder: "#4a4a4a", text: "#ffffff", muted: "#a3a3a3", diffAdd: "#213a2b", diffDelete: "#4a221d", diffAddGutter: "#213a2b", diffDeleteGutter: "#4a221d", diffGutterText: "#8b949e", diffAddText: "#3fb950", diffDeleteText: "#f85149" };
+const lightPalette = { background: "#ffffff", surface: "#ffffff", raised: "#f6f6f6", border: "#d9d9d9", controlBorder: "#a8a8a8", text: "#111111", muted: "#666666", diffAdd: "#dafbe1", diffDelete: "#ffebe9", diffAddGutter: "#aceebb", diffDeleteGutter: "#ffcecb", diffGutterText: "#1f2328", diffAddText: "#116329", diffDeleteText: "#82071e" };
 
 export const appearanceCssVars = (appearance: AppearanceSettings): CSSProperties => {
   const palette = appearance.theme === "dark" ? darkPalette : lightPalette;
@@ -12,6 +12,7 @@ export const appearanceCssVars = (appearance: AppearanceSettings): CSSProperties
     "--app-surface": palette.surface,
     "--app-raised": palette.raised,
     "--app-border": palette.border,
+    "--app-control-border": palette.controlBorder,
     "--app-text": palette.text,
     "--app-muted": palette.muted,
     "--app-accent": appearance.accentColor,

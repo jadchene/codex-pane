@@ -17,24 +17,28 @@ const appIconUrl = new URL("../assets/icon.svg", import.meta.url).href;
 const fullScreen = ref(false);
 const maximized = ref(false);
 const sessionsOpen = ref(false);
+const sessionsShowAll = ref(false);
 const settingsOpen = ref(false);
 const sessionPaneId = ref<string | null>(null);
 const sessionPane = computed(() => store.state.panes.find((pane) => pane.id === sessionPaneId.value) ?? null);
+const sessionFilterCwd = computed(() => sessionPane.value?.cwd || store.state.defaultCwd || "");
 const workspaceView = ref<InstanceType<typeof WorkspaceView> | null>(null);
 
 const layoutLabels: Record<LayoutKind, string> = {
   single: "单窗格",
   vertical: "左右双栏",
   horizontal: "上下双栏",
-  quad: "四方格",
-  six: "六窗格"
+  quad: "四宫格",
+  fourColumns: "横向四栏",
+  fourRows: "纵向四栏",
+  six: "六宫格"
 };
 const layoutOptions = Object.entries(layoutLabels).map(([key, label]) => ({ key, label }));
 const activeTheme = computed(() => store.state.appearance.theme === "dark" ? darkTheme : null);
 const themeOverrides = computed(() => appearanceThemeOverrides(store.state.appearance));
 const appearanceStyle = computed(() => appearanceCssVars(store.state.appearance));
 
-const layoutPaneCounts: Record<LayoutKind, number> = { single: 1, vertical: 2, horizontal: 2, quad: 4, six: 6 };
+const layoutPaneCounts: Record<LayoutKind, number> = { single: 1, vertical: 2, horizontal: 2, quad: 4, fourColumns: 4, fourRows: 4, six: 6 };
 const pendingLayout = ref<LayoutKind | null>(null);
 const selectedPaneIds = ref<string[]>([]);
 const layoutSelectionError = ref("");
@@ -43,30 +47,6 @@ const protectedPaneIds = computed(() => new Set(visiblePanesForSelection.value.f
 const targetPaneCount = computed(() => pendingLayout.value ? layoutPaneCounts[pendingLayout.value] : 0);
 
 const isEmptyPane = (pane: PaneState): boolean => !pane.threadId && !pane.activeTurnId && pane.items.length === 0 && !pane.draft.trim() && pane.attachments.length === 0 && pane.references.length === 0;
-const resetPane = (pane: PaneState): void => {
-  pane.title = "新会话";
-  pane.threadId = null;
-  pane.draft = "";
-  pane.attachments = [];
-  pane.references = [];
-  pane.skills = [];
-  pane.activePermissionProfile = null;
-  pane.activeTurnId = null;
-  pane.status = "idle";
-  pane.items = [];
-  pane.tokenUsage = null;
-  pane.contextRemainingPercent = null;
-  pane.turnDiff = undefined;
-  pane.activeFlags = [];
-  pane.approvalReviews = [];
-  pane.strictReviewRequired = false;
-  pane.backgroundTerminals = [];
-  pane.subAgents = {};
-  pane.error = null;
-  pane.unread = false;
-  pane.scrollTop = 0;
-  pane.followTail = true;
-};
 const applyLayout = (layout: LayoutKind, keepIds?: string[]): void => {
   const currentCount = layoutPaneCounts[store.state.layout];
   const targetCount = layoutPaneCounts[layout];
@@ -75,7 +55,7 @@ const applyLayout = (layout: LayoutKind, keepIds?: string[]): void => {
     const keepSet = new Set(keepIds ?? visible.slice(0, targetCount).map((pane) => pane.id));
     const kept = visible.filter((pane) => keepSet.has(pane.id));
     const removed = visible.filter((pane) => !keepSet.has(pane.id));
-    removed.forEach(resetPane);
+    removed.forEach(store.resetPane);
     store.state.panes = [...kept, ...removed, ...store.state.panes.slice(currentCount)];
     if (!store.state.focusedPaneId || !keepSet.has(store.state.focusedPaneId)) store.state.focusedPaneId = kept[0]?.id ?? null;
   }
@@ -128,8 +108,9 @@ const controlWindow = async (action: "minimize" | "maximize" | "close"): Promise
 const openSessions = async (paneId: string): Promise<void> => {
   sessionPaneId.value = paneId;
   sessionsOpen.value = true;
+  sessionsShowAll.value = !sessionFilterCwd.value;
   try {
-    await store.loadThreads();
+    await store.loadThreads("", sessionsShowAll.value ? null : sessionFilterCwd.value);
   } catch (error) {
     if (sessionPane.value) sessionPane.value.error = `无法读取历史会话：${error instanceof Error ? error.message : String(error)}`;
   }
@@ -137,9 +118,18 @@ const openSessions = async (paneId: string): Promise<void> => {
 
 const searchSessions = async (value: string): Promise<void> => {
   try {
-    await store.loadThreads(value);
+    await store.loadThreads(value, sessionsShowAll.value ? null : sessionFilterCwd.value);
   } catch (error) {
     if (sessionPane.value) sessionPane.value.error = `无法搜索历史会话：${error instanceof Error ? error.message : String(error)}`;
+  }
+};
+
+const changeSessionScope = async (showAll: boolean, search: string): Promise<void> => {
+  sessionsShowAll.value = showAll;
+  try {
+    await store.loadThreads(search, showAll ? null : sessionFilterCwd.value);
+  } catch (error) {
+    if (sessionPane.value) sessionPane.value.error = `无法读取历史会话：${error instanceof Error ? error.message : String(error)}`;
   }
 };
 
@@ -221,7 +211,7 @@ onUnmounted(() => {
             </NSpin>
           </NLayout>
 
-          <SessionDrawer :show="sessionsOpen" :pane="sessionPane" :threads="store.state.threads" @update:show="value => value ? sessionsOpen = true : closeSessions()" @search="searchSessions" @resume="resumeSession" />
+          <SessionDrawer :show="sessionsOpen" :pane="sessionPane" :threads="store.state.threads" :show-all="sessionsShowAll" :current-cwd="sessionFilterCwd" @update:show="value => value ? sessionsOpen = true : closeSessions()" @search="searchSessions" @scope="changeSessionScope" @resume="resumeSession" />
           <SettingsModal :command-shell-path="store.state.appearance.commandShellPath" :show="settingsOpen" @update:command-shell-path="store.updateAppearance({ commandShellPath: $event })" @update:show="settingsOpen = $event" />
           <NModal :show="pendingLayout !== null" preset="card" title="选择要保留的窗格" class="layout-reduction-modal" :mask-closable="false" @update:show="value => { if (!value) pendingLayout = null; }">
             <NSpace vertical :size="14">

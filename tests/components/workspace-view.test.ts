@@ -35,4 +35,26 @@ describe("WorkspaceView focus navigation", () => {
     expect(store.state.focusedPaneId).toBe(store.state.panes[3]!.id);
     expect(wrapper.findAll("[data-test-pane]")).toHaveLength(4);
   });
+
+  it.each([
+    { layout: "fourColumns" as const, direction: "ArrowRight", blockedDirection: "ArrowDown" },
+    { layout: "fourRows" as const, direction: "ArrowDown", blockedDirection: "ArrowRight" }
+  ])("renders and navigates $layout as a one-dimensional four-pane layout", async ({ layout, direction, blockedDirection }) => {
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    const store = useWorkspaceStore();
+    store.state.layout = layout;
+    store.state.focusedPaneId = store.state.panes[0]!.id;
+    vi.spyOn(store, "scheduleSave").mockImplementation(() => undefined);
+    const wrapper = mount(WorkspaceView, {
+      global: { plugins: [pinia], stubs: { Splitpanes: passthrough, Pane: passthrough, PaneHost: paneHost } }
+    });
+
+    expect(wrapper.findAll("[data-test-pane]")).toHaveLength(4);
+    expect(wrapper.get("main").classes()).toContain(`workspace-layout-${layout}`);
+    await wrapper.get("main").trigger("keydown", { key: direction, altKey: true });
+    expect(store.state.focusedPaneId).toBe(store.state.panes[1]!.id);
+    await wrapper.get("main").trigger("keydown", { key: blockedDirection, altKey: true });
+    expect(store.state.focusedPaneId).toBe(store.state.panes[1]!.id);
+  });
 });

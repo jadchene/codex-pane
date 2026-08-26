@@ -14,6 +14,8 @@ const validState = {
 describe("workspace persistence validation", () => {
   it("accepts the supported persisted shape", () => {
     expect(workspaceStateSchema.parse(validState)).toMatchObject(validState);
+    expect(workspaceStateSchema.parse({ ...validState, layout: "fourColumns", splitSizes: { fourColumns: [25, 25, 25, 25] } }).layout).toBe("fourColumns");
+    expect(workspaceStateSchema.parse({ ...validState, layout: "fourRows", splitSizes: { fourRows: [25, 25, 25, 25] } }).layout).toBe("fourRows");
   });
 
   it("loads workspaces saved before the global default directory was added", () => {
@@ -40,6 +42,12 @@ describe("workspace persistence validation", () => {
       ...validState,
       panes: [{ ...validState.panes[0], attachments: [{ id: crypto.randomUUID(), name: "x", url: "file:///etc/passwd", size: 1 }] }]
     })).toThrow();
+  });
+
+  it("persists managed file references without accepting an empty path", () => {
+    const reference = { id: crypto.randomUUID(), name: "notes.txt", path: "codex-file://files/test", managed: true };
+    expect(workspaceStateSchema.parse({ ...validState, panes: [{ ...validState.panes[0], references: [reference] }] }).panes[0]!.references).toEqual([reference]);
+    expect(() => workspaceStateSchema.parse({ ...validState, panes: [{ ...validState.panes[0], references: [{ ...reference, path: "" }] }] })).toThrow();
   });
 
   it("rejects duplicate and missing focused pane identities", () => {

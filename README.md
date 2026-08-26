@@ -44,7 +44,7 @@ If Codex Pane cannot connect, run `codex --version` in PowerShell, correct the r
 
 ### Panes and conversations
 
-- Available layouts: single pane, side by side, stacked, four panes, and a fixed 2×3 six-pane grid.
+- Available layouts: single pane, side by side, stacked, 2×2 grid, four columns, four rows, and a fixed 2×3 six-pane grid.
 - Each pane owns its thread settings and draft. A thread cannot be edited in two panes at the same time.
 - Pane dividers, window size, focused pane, and thread bindings are restored after restart.
 - Resume opens inside the current pane, so the other panes remain available.
@@ -73,14 +73,14 @@ Resumed threads keep their own working directory.
 | New line | Press Shift+Enter. |
 | Slash commands | Type `/` or use the `/` button, then press Tab or Enter to choose. |
 | Skills | Type `@` or use the `@` button, then choose a Skill. |
-| Attachments | Use the attachment button to choose images or ordinary files. |
-| Paste images | Paste a clipboard image, Windows image path, or HTTPS image URL. Multiple images are supported. |
+| Attachments | Use one attachment button and one file picker for images or ordinary files. |
+| Paste | Text enters the composer; clipboard images or files are saved as attachments. |
 | Move between panes | Press Alt+Arrow. |
 | Scroll to the latest message | With an empty composer, press Arrow Down. |
 
-A selected Skill remains visible as `@SkillName` and is sent as a structured Skill input. Ordinary files are sent as file references. `[Image #N]` is only the displayed attachment label; Codex receives the corresponding structured image input.
+A selected Skill remains visible as `@SkillName` and is sent as a structured Skill input. Images and ordinary files are copied into the adjacent `data` directory before being sent as local-image or file-reference input.
 
-Each pane accepts up to 20 images and 20 file references. A local image may be up to 15 MB, 8192 pixels on either edge, and 40 million pixels in total.
+Each pane accepts up to 20 attachments. A local image may be up to 15 MB, 8192 pixels on either edge, and 40 million pixels in total; an ordinary file may be up to 100 MB.
 
 ### Slash commands
 
@@ -108,7 +108,7 @@ Each pane accepts up to 20 images and 20 file references. A local image may be u
 | Font size | Apply a size from 12 to 20 to the whole interface. |
 | Accent color | Change the active border and control accent. |
 | Default working directory | Set the directory used to start app-server and new threads. |
-| Command shell path | Identify the PowerShell-compatible shell used by displayed commands. |
+| PowerShell 7 path | Identify and remove the outer `pwsh -Command` wrapper from displayed commands. |
 | MCP Gateway adaptation | Show the downstream service and tool for supported Gateway calls. |
 
 Settings also shows the effective Codex model, provider, sandbox mode, approval policy, approval reviewer, reasoning effort, web-search mode, service tier, and permission profiles. These values come from Codex and are read-only here. Use the model and reasoning controls in each pane, and `/permissions` for an allowed thread permission mode.
@@ -131,12 +131,14 @@ win-unpacked/
 └─ data/
    ├─ workspaces/
    ├─ media/
+   ├─ files/
    ├─ logs/
    └─ chromium/
 ```
 
 - `workspaces` stores the window, layouts, pane bindings, drafts, working directories, and attachment references.
 - `media` stores validated local image copies for up to 30 days, with a 500 MB total limit.
+- `files` stores ordinary file copies added through selection or paste.
 - `logs` stores redacted diagnostics for up to 7 days.
 - `chromium` contains browser preferences, local storage, cookies, sessions, network state, and caches.
 
@@ -148,7 +150,7 @@ Keep `data` when replacing the unpacked application. Delete it only when its con
 
 - Codex Pane calls the local `codex app-server`; remote app-server connections are not supported.
 - It does not save API keys, OAuth tokens, complete environment variables, or approval responses.
-- Local images are validated and copied into managed storage. Persisted remote image URLs are protected with Windows DPAPI.
+- Local images are validated and copied to `data/media`, while ordinary files are copied to `data/files`; app-server receives only the managed copy path.
 - Closing or reconnecting stops the app-server process owned by that application instance.
 - External links must use HTTPS and require confirmation before opening.
 - The app has no installer, automatic update service, or built-in publishing flow.

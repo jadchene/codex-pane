@@ -4,10 +4,11 @@ import { NButton, NEmpty, NInput, NList, NListItem, NTag, NText, NTime } from "n
 import { CloseOutline } from "@vicons/ionicons5";
 import type { PaneState, ThreadSummary } from "../types";
 
-const props = defineProps<{ show: boolean; pane: PaneState | null; threads: ThreadSummary[] }>();
+const props = defineProps<{ show: boolean; pane: PaneState | null; threads: ThreadSummary[]; showAll: boolean; currentCwd: string }>();
 const emit = defineEmits<{
   "update:show": [value: boolean];
   search: [value: string];
+  scope: [showAll: boolean, search: string];
   resume: [threadId: string];
 }>();
 const search = ref("");
@@ -37,7 +38,11 @@ onUnmounted(() => { if (timer) clearTimeout(timer); });
     <section class="session-pane-page" role="region" aria-label="恢复会话" @keydown.esc.stop="emit('update:show', false)">
       <header class="session-pane-header"><strong>恢复会话</strong><NButton quaternary circle size="small" aria-label="关闭恢复会话" @click="emit('update:show', false)"><template #icon><CloseOutline /></template></NButton></header>
       <div class="session-search-sticky">
-        <NInput ref="searchInput" v-model:value="search" clearable placeholder="按标题或内容搜索历史会话" aria-label="搜索历史会话" />
+        <div class="session-search-row">
+          <NInput ref="searchInput" v-model:value="search" clearable placeholder="按标题或内容搜索历史会话" aria-label="搜索历史会话" />
+          <NButton secondary class="session-scope-button" :disabled="showAll && !currentCwd" @click="emit('scope', !showAll, search)">{{ showAll ? "仅当前目录" : "显示全部" }}</NButton>
+        </div>
+        <NText depth="3" class="session-scope-label">{{ showAll ? "所有工作目录" : `当前目录：${currentCwd}` }}</NText>
       </div>
       <div class="session-list-scroll">
         <NEmpty v-if="threads.length === 0" description="没有找到可恢复的会话" />

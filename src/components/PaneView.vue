@@ -2,9 +2,10 @@
 import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { NAlert, NButton, NDropdown, NIcon, NInput, NSelect, NTag, NText, NTooltip } from "naive-ui";
 import { AddOutline, AttachOutline, DocumentTextOutline, LinkOutline, PauseOutline, SendOutline } from "@vicons/ionicons5";
-import type { PaneState, PendingServerRequest } from "../types";
+import type { PaneState, PendingServerRequest, UiItem } from "../types";
 import ApprovalCenter from "./ApprovalCenter.vue";
 import ItemCard from "./ItemCard.vue";
+import VirtualList from "./VirtualList.vue";
 
 const props = defineProps<{
   pane: PaneState;
@@ -23,23 +24,24 @@ const emit = defineEmits<{
   interrupt: [];
   newThread: [];
   openSessions: [];
-  chooseImage: [];
-  chooseFiles: [];
+  chooseAttachments: [];
   openSkills: [];
-  pasteImage: [];
-  pasteReference: [value: string];
+  pasteAttachments: [paths: string[]];
   slashCommand: [command: string];
   removeAttachment: [id: string];
   removeReference: [id: string];
   resolve: [request: PendingServerRequest, result?: unknown, error?: { code: number; message: string }];
   scrollState: [top: number, followTail: boolean];
+  loadOlder: [];
   activate: [];
   itemAction: [action: { type: "switchAgent"; threadId: string } | { type: "stopBackgroundProcess"; processId: string } | { type: "stopAllBackgroundProcesses" } | { type: "switchPermissionProfile"; profileId: string }];
 }>();
 
-const output = ref<HTMLElement | null>(null);
+type ConversationScroller = { $el: HTMLElement; scrollToBottom: () => void; scrollToPosition: (position: number) => void };
+
+const output = ref<ConversationScroller | null>(null);
 const composer = ref<{ focus: () => void } | null>(null);
-const restoredScrollKey = ref<string | null>(null);
+const restoredThreadId = ref<string | null>(null);
 const slashIndex = ref(0);
 const effortOptions = computed(() => props.models.find((model) => model.value === props.pane.model)?.efforts.map((effort) => ({ label: effort, value: effort })) ?? []);
 const modelSupportsImage = computed(() => {
@@ -82,8 +84,8 @@ const autoReviewLabel = computed(() => {
   if (props.approvalReviewer === "auto_review" || props.approvalReviewer === "guardian_subagent") return "自动审查已启用";
   return "";
 });
-const modelSelectWidth = computed(() => `${Math.max(14, Math.min(30, (props.models.find((model) => model.value === props.pane.model)?.label.length ?? 4) + 5))}ch`);
-const effortSelectWidth = computed(() => `${Math.max(10, Math.min(18, (props.pane.effort?.length ?? 2) + 5))}ch`);
+const modelSelectLabels = computed(() => ["模型", ...props.models.map((model) => model.label)]);
+const effortSelectLabels = computed(() => ["推理", ...effortOptions.value.map((option) => option.label)]);
 const composerDropdownOptions = computed(() => {
   const options = composerMenuMode.value === "slash"
     ? filteredSlashOptions.value.map((option) => ({ key: `slash:${option.key}`, label: `${option.label}  ${option.description}` }))
@@ -92,10 +94,17 @@ const composerDropdownOptions = computed(() => {
 });
 const composerMenuProps = () => ({ class: "composer-options-menu", style: "max-height: min(320px, calc(100vh - 180px));" });
 const activeComposerOptions = computed(() => composerMenuMode.value === "slash" ? filteredSlashOptions.value : filteredSkills.value);
-const attachmentOptions = computed(() => [
-  { key: "image", label: "图片", disabled: !modelSupportsImage.value },
-  { key: "file", label: "文件" }
-]);
+const itemKey = (item: UiItem): string => `${item.turnId}:${item.id}`;
+const estimateItemSize = (item: UiItem): number => {
+  if (item.type === "userMessage") return 72;
+  if (item.type === "agentMessage" || item.type === "reasoning" || item.type === "plan") {
+    const text = typeof item.data.text === "string" ? item.data.text : item.streamText;
+    return Math.min(560, 72 + Math.ceil(text.length / 44) * 20);
+  }
+  if (item.type === "fileChange") return 180;
+  return 124;
+};
+const outputElement = (): HTMLElement | null => output.value?.$el ?? null;
 
 const focusComposer = async (): Promise<void> => {
   await nextTick();
@@ -104,20 +113,24 @@ const focusComposer = async (): Promise<void> => {
 const scrollToBottom = async (): Promise<void> => {
   if (!props.pane.followTail) return;
   await nextTick();
-  if (!output.value) return;
-  output.value.scrollTop = output.value.scrollHeight;
-  emit("scrollState", output.value.scrollTop, true);
+  const element = outputElement();
+  if (!element) return;
+  element.scrollTop = element.scrollHeight;
+  emit("scrollState", element.scrollTop, true);
 };
 const forceScrollToBottom = async (): Promise<void> => {
   await nextTick();
-  if (!output.value) return;
-  output.value.scrollTop = output.value.scrollHeight;
-  emit("scrollState", output.value.scrollTop, true);
+  const element = outputElement();
+  if (!element) return;
+  element.scrollTop = element.scrollHeight;
+  emit("scrollState", element.scrollTop, true);
 };
-const handleOutputScroll = (): void => {
-  if (!output.value) return;
-  const followTail = output.value.scrollHeight - output.value.scrollTop - output.value.clientHeight < 80;
-  emit("scrollState", output.value.scrollTop, followTail);
+const handleOutputScroll = (event: Event): void => {
+  const element = event.currentTarget instanceof HTMLElement ? event.currentTarget : outputElement();
+  if (!element) return;
+  const followTail = element.scrollHeight - element.scrollTop - element.clientHeight < 80;
+  emit("scrollState", element.scrollTop, followTail);
+  if (element.scrollTop < 240) emit("loadOlder");
 };
 const selectSlashCommand = (command: string): void => {
   props.pane.draft = "";
@@ -176,16 +189,23 @@ const handleKeydown = (event: KeyboardEvent): void => {
   }
 };
 const handlePaste = (event: ClipboardEvent): void => {
-  const hasImage = [...(event.clipboardData?.items ?? [])].some((item) => item.type.startsWith("image/"));
-  if (hasImage) {
+  const clipboardData = event.clipboardData;
+  const files = [...(clipboardData?.files ?? [])];
+  const hasBinaryItem = files.length > 0 || [...(clipboardData?.items ?? [])].some((item) => item.kind === "file");
+  if (hasBinaryItem) {
     event.preventDefault();
-    emit("pasteImage");
-    return;
-  }
-  const text = event.clipboardData?.getData("text/plain")?.trim() ?? "";
-  if ((/^https:\/\//i.test(text) || /^(?:['\"]?[a-z]:\\|['\"]?\\\\)/i.test(text)) && /\.(png|jpe?g|webp|gif|bmp)(?:[?#].*)?['\"]?$/i.test(text)) {
-    event.preventDefault();
-    emit("pasteReference", text);
+    const directPaths = [
+      ...files.map((file) => (file as File & { path?: string }).path ?? ""),
+      ...(window.codexPane?.resolveFilePaths?.(files) ?? [])
+    ].filter(Boolean);
+    const uriPaths = (clipboardData?.getData("text/uri-list") ?? "").split(/\r?\n/).filter((line) => line.startsWith("file://")).map((line) => {
+      try {
+        return decodeURIComponent(new URL(line).pathname).replace(/^\/([a-z]:)/i, "$1").replaceAll("/", "\\");
+      } catch {
+        return "";
+      }
+    }).filter(Boolean);
+    emit("pasteAttachments", [...new Set([...directPaths, ...uriPaths])]);
   }
 };
 const openSlashMenu = (): void => {
@@ -194,13 +214,11 @@ const openSlashMenu = (): void => {
   void focusComposer();
 };
 const openSkillMenu = (): void => {
-  props.pane.draft = props.pane.draft && !/\s$/.test(props.pane.draft) ? `${props.pane.draft} @` : `${props.pane.draft}@`;
+  if (!/(^|\s)@[^\s@]*$/.test(props.pane.draft)) {
+    props.pane.draft = props.pane.draft && !/\s$/.test(props.pane.draft) ? `${props.pane.draft} @` : `${props.pane.draft}@`;
+  }
   slashIndex.value = 0;
   void focusComposer();
-};
-const selectAttachment = (key: string): void => {
-  if (key === "image") emit("chooseImage");
-  else if (key === "file") emit("chooseFiles");
 };
 const activatePane = (event: MouseEvent): void => {
   emit("activate");
@@ -212,7 +230,10 @@ const activatePane = (event: MouseEvent): void => {
 const hasFocusedInteractiveControl = (): boolean => document.activeElement instanceof Element
   && !!document.activeElement.closest(".inline-approval, .n-select, .n-base-selection, button, input:not(textarea), select, [contenteditable], [role='button'], [role='option'], [role='combobox']");
 
-watch(() => props.pane.items.map((item) => `${item.id}:${item.streamText.length}:${item.status}`).join("|"), scrollToBottom);
+watch(() => {
+  const last = props.pane.items.at(-1);
+  return [props.pane.items.length, last?.id, last?.streamText.length, last?.status] as const;
+}, scrollToBottom);
 watch(() => props.pendingRequests.length, (count, previous) => {
   if (previous > count) void focusComposer();
 });
@@ -225,14 +246,14 @@ watch(skillQuery, (query, previous) => {
   slashIndex.value = 0;
 });
 watch(
-  () => [props.pane.threadId, props.pane.items.length, props.pane.items[0]?.id, props.pane.items.at(-1)?.id] as const,
-  async ([threadId, itemCount, firstItemId, lastItemId]) => {
-    const key = `${threadId ?? "new"}:${itemCount}:${firstItemId ?? ""}:${lastItemId ?? ""}`;
-    if (props.pane.followTail || itemCount === 0 || restoredScrollKey.value === key) return;
+  () => [props.pane.threadId, props.pane.items.length > 0, props.pane.followTail] as const,
+  async ([threadId, hasItems, followTail]) => {
+    if (followTail || !hasItems || restoredThreadId.value === threadId) return;
     await nextTick();
-    if (!output.value) return;
-    output.value.scrollTop = Math.min(props.pane.scrollTop, Math.max(0, output.value.scrollHeight - output.value.clientHeight));
-    restoredScrollKey.value = key;
+    const element = outputElement();
+    if (!element) return;
+    element.scrollTop = Math.min(props.pane.scrollTop, Math.max(0, element.scrollHeight - element.clientHeight));
+    restoredThreadId.value = threadId;
   },
   { immediate: true }
 );
@@ -243,7 +264,10 @@ watch(() => props.pane.model, (model) => {
 });
 onMounted(async () => {
   await nextTick();
-  if (output.value && props.pane.followTail) output.value.scrollTop = output.value.scrollHeight;
+  if (props.pane.followTail) {
+    const element = outputElement();
+    if (element) element.scrollTop = element.scrollHeight;
+  }
 });
 defineExpose({ focusComposer });
 </script>
@@ -260,10 +284,11 @@ defineExpose({ focusComposer });
       </NTag>
     </header>
 
-    <div ref="output" class="pane-output" @scroll="handleOutputScroll">
-      <div v-if="pane.items.length === 0" class="empty-conversation"><NText depth="3">输入消息开始会话</NText></div>
-      <ItemCard v-for="item in pane.items" :key="`${item.turnId}:${item.id}`" :item="item" :command-shell-path="commandShellPath" :mcp-gateway-adaptation="mcpGatewayAdaptation" @action="emit('itemAction', $event)" />
-    </div>
+    <VirtualList ref="output" class="pane-output" :items="pane.items" :item-key="itemKey" :estimate-size="estimateItemSize" :min-item-size="56" :buffer="160" :follow-tail="pane.followTail" @scroll="handleOutputScroll">
+      <template #before><div v-if="pane.historyLoading" class="history-loading">正在加载更早内容…</div></template>
+      <template #default="{ item }"><div class="conversation-item"><ItemCard :item="item" :command-shell-path="commandShellPath" :mcp-gateway-adaptation="mcpGatewayAdaptation" @action="emit('itemAction', $event)" /></div></template>
+      <template #empty><div class="empty-conversation"><NText depth="3">输入消息开始会话</NText></div></template>
+    </VirtualList>
 
     <NAlert v-if="pane.error" type="error" closable class="pane-error" @close="pane.error = null">{{ pane.error }}</NAlert>
 
@@ -299,9 +324,7 @@ defineExpose({ focusComposer });
         <div class="composer-tools">
           <NTooltip><template #trigger><NButton quaternary circle size="small" aria-label="斜杠命令" @click="openSlashMenu">/</NButton></template>斜杠命令</NTooltip>
           <NTooltip><template #trigger><NButton quaternary circle size="small" aria-label="选择 Skill" @click="openSkillMenu">@</NButton></template>选择 Skill</NTooltip>
-          <NDropdown trigger="click" placement="top-start" :options="attachmentOptions" @select="selectAttachment">
-            <NTooltip><template #trigger><NButton quaternary circle size="small" aria-label="添加附件"><template #icon><NIcon :component="AttachOutline" /></template></NButton></template>添加图片或文件</NTooltip>
-          </NDropdown>
+          <NTooltip><template #trigger><NButton quaternary circle size="small" aria-label="添加附件" @click="emit('chooseAttachments')"><template #icon><NIcon :component="AttachOutline" /></template></NButton></template>添加附件</NTooltip>
           <span class="cwd-text">{{ effectiveCwd }}</span>
         </div>
         <div class="composer-submit">
@@ -312,8 +335,14 @@ defineExpose({ focusComposer });
       </div>
 
       <footer class="status-line">
-        <NSelect v-model:value="pane.model" class="compact-select model-select" size="tiny" :style="{ width: modelSelectWidth }" :options="models" placeholder="模型" @mousedown.stop @click.stop />
-        <NSelect v-model:value="pane.effort" class="compact-select effort-select" size="tiny" :style="{ width: effortSelectWidth }" :options="effortOptions" placeholder="推理" @mousedown.stop @click.stop />
+        <div class="content-fit-select model-select-fit">
+          <span class="select-width-sizer" aria-hidden="true"><span v-for="label in modelSelectLabels" :key="label">{{ label }}</span></span>
+          <NSelect v-model:value="pane.model" class="compact-select model-select" size="tiny" :options="models" placeholder="模型" :consistent-menu-width="false" :menu-props="{ class: 'content-fit-select-menu' }" @mousedown.stop @click.stop />
+        </div>
+        <div class="content-fit-select effort-select-fit">
+          <span class="select-width-sizer" aria-hidden="true"><span v-for="label in effortSelectLabels" :key="label">{{ label }}</span></span>
+          <NSelect v-model:value="pane.effort" class="compact-select effort-select" size="tiny" :options="effortOptions" placeholder="推理" :consistent-menu-width="false" :menu-props="{ class: 'content-fit-select-menu' }" @mousedown.stop @click.stop />
+        </div>
         <span v-if="pane.status === 'running' || pane.status === 'starting'" class="working-indicator" role="status">Working<span class="working-dots">...</span></span>
         <span v-if="autoReviewLabel" class="auto-review-indicator" role="status">{{ autoReviewLabel }}</span>
         <span v-if="pane.activeFlags?.includes('waitingOnApproval')">等待操作确认</span>

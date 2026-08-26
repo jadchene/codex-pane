@@ -1,7 +1,7 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { StringDecoder } from "node:string_decoder";
-import { JsonLineParser, RuntimeProtocolValidator, isResponse, isServerRequest, parseEnvelope, type JsonRpcError, type JsonRpcResponse, type RequestId } from "../../packages/protocol/src/index.js";
+import { JsonLineParser, RuntimeProtocolValidator, isResponse, isServerRequest, parseEnvelope, type JsonRpcError, type JsonRpcNotification, type JsonRpcResponse, type RequestId } from "../../packages/protocol/src/index.js";
 import { BASELINE, UNREGISTERED_CAPABILITY_REQUEST_METHODS } from "../../packages/protocol/src/method-manifest.js";
 import type { ConnectionState, ProtocolEvent } from "../shared/contracts.js";
 import { forceTerminateProcessTree, spawnCodex } from "./codex-process.js";
@@ -26,6 +26,8 @@ export class AppServerSupervisor extends EventEmitter {
   #restartUsed = false;
   #stabilityTimer: NodeJS.Timeout | null = null;
   #validator: RuntimeProtocolValidator | null = null;
+  #deltaNotifications = new Map<string, JsonRpcNotification>();
+  #deltaTimer: NodeJS.Timeout | null = null;
   #workingDirectory: string;
   #state: ConnectionState = {
     phase: "stopped",
@@ -177,6 +179,7 @@ export class AppServerSupervisor extends EventEmitter {
     this.#rejectAll(new Error("Codex 服务已停止"));
     this.#serverRequests.clear();
     this.#activeTurns.clear();
+    this.#clearDeltaNotifications();
     if (child) {
       await this.#teardownChild(child);
     }
@@ -252,10 +255,12 @@ export class AppServerSupervisor extends EventEmitter {
     }
 
     if (isResponse(envelope)) {
+      if (this.#deltaNotifications.size) this.#flushDeltaNotifications();
       this.#handleResponse(envelope);
       return;
     }
     if (isServerRequest(envelope)) {
+      if (this.#deltaNotifications.size) this.#flushDeltaNotifications();
       const validation = this.#validator?.validateServerRequest(envelope);
       if (validation && !validation.valid) {
         this.#emitProtocol("diagnostic", { level: "warning", message: `Codex 服务请求参数不符合 0.149.1 Schema：${envelope.method}`, errors: validation.errors.slice(0, 5) });
@@ -282,6 +287,43 @@ export class AppServerSupervisor extends EventEmitter {
       this.#emitProtocol("server-request", envelope);
       return;
     }
+    if (this.#bufferDeltaNotification(envelope)) return;
+    if (this.#deltaNotifications.size) this.#flushDeltaNotifications();
+    this.#handleNotification(envelope);
+  }
+
+  #bufferDeltaNotification(envelope: JsonRpcNotification): boolean {
+    if (!envelope.method.includes("/delta") && !envelope.method.endsWith("outputDelta")) return false;
+    const params = envelope.params && typeof envelope.params === "object" ? envelope.params as Record<string, unknown> : {};
+    const field = typeof params.delta === "string" ? "delta" : typeof params.output === "string" ? "output" : null;
+    if (!field) return false;
+    const key = [envelope.method, params.threadId, params.turnId, params.itemId].map(String).join(":");
+    const previous = this.#deltaNotifications.get(key);
+    if (previous) {
+      const previousParams = previous.params as Record<string, unknown>;
+      previousParams[field] = `${typeof previousParams[field] === "string" ? previousParams[field] : ""}${typeof params[field] === "string" ? params[field] : ""}`;
+    } else {
+      this.#deltaNotifications.set(key, { ...envelope, params: { ...params } });
+    }
+    if (!this.#deltaTimer) this.#deltaTimer = setTimeout(() => this.#flushDeltaNotifications(), 32);
+    return true;
+  }
+
+  #flushDeltaNotifications(): void {
+    if (this.#deltaTimer) clearTimeout(this.#deltaTimer);
+    this.#deltaTimer = null;
+    const notifications = [...this.#deltaNotifications.values()];
+    this.#deltaNotifications.clear();
+    for (const notification of notifications) this.#handleNotification(notification);
+  }
+
+  #clearDeltaNotifications(): void {
+    if (this.#deltaTimer) clearTimeout(this.#deltaTimer);
+    this.#deltaTimer = null;
+    this.#deltaNotifications.clear();
+  }
+
+  #handleNotification(envelope: JsonRpcNotification): void {
     const validation = this.#validator?.validateServerNotification(envelope);
     if (validation && !validation.valid) {
       this.#emitProtocol("diagnostic", { level: "warning", message: `Codex 通知与固定 Schema 存在差异：${envelope.method}`, errors: validation.errors.slice(0, 5) });
@@ -330,6 +372,7 @@ export class AppServerSupervisor extends EventEmitter {
     this.#rejectAll(error);
     this.#serverRequests.clear();
     this.#activeTurns.clear();
+    this.#clearDeltaNotifications();
     this.#child = null;
     await this.#teardownChild(child);
     if (this.#stopping || this.#generation !== generation) return;
@@ -342,6 +385,7 @@ export class AppServerSupervisor extends EventEmitter {
     this.#rejectAll(new Error("Codex 服务意外退出"));
     this.#serverRequests.clear();
     this.#activeTurns.clear();
+    this.#clearDeltaNotifications();
     if (this.#stopping) {
       return;
     }

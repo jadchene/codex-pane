@@ -88,7 +88,12 @@ describe("PaneView compact workbench interactions", () => {
     expect(selects[1]!.classes()).toContain("effort-select");
     expect(selects[0]!.props("size")).toBe("tiny");
     expect(selects[1]!.props("size")).toBe("tiny");
-    expect(selects[0]!.attributes("style")).toContain("14ch");
+    expect(selects[0]!.props("consistentMenuWidth")).toBe(false);
+    expect(selects[1]!.props("consistentMenuWidth")).toBe(false);
+    expect(selects[0]!.props("menuProps")).toEqual({ class: "content-fit-select-menu" });
+    expect(selects[1]!.props("menuProps")).toEqual({ class: "content-fit-select-menu" });
+    expect(wrapper.get(".model-select-fit .select-width-sizer").text()).toContain("GPT-5");
+    expect(wrapper.get(".effort-select-fit .select-width-sizer").text()).toContain("medium");
   });
 
   it("does not let model or effort selectors return focus to the composer", async () => {
@@ -139,12 +144,14 @@ describe("PaneView compact workbench interactions", () => {
     expect(wrapper.get(".status-line").text()).toContain("上下文 38%");
   });
 
-  it("opens Skills with @ and combines image and file picking under attachments", async () => {
+  it("opens Skills with @ and uses one attachment action for files and images", async () => {
     const { value, wrapper } = mountPane();
     value.skills = [{ name: "project-verify", description: "验证项目", path: "E:\\Skills\\project-verify\\SKILL.md" }];
     await wrapper.get('button[aria-label="选择 Skill"]').trigger("click");
     await nextTick();
     expect(wrapper.emitted("openSkills")).toHaveLength(1);
+    expect(value.draft).toBe("@");
+    await wrapper.get('button[aria-label="选择 Skill"]').trigger("click");
     expect(value.draft).toBe("@");
     const composerDropdown = wrapper.findAllComponents(NDropdown).find((dropdown) => dropdown.props("trigger") === "manual")!;
     expect(composerDropdown.props("options")?.[0]?.key).toBe("skill:project-verify");
@@ -157,11 +164,17 @@ describe("PaneView compact workbench interactions", () => {
     composerDropdown.vm.$emit("select", "skill:project-verify");
     await nextTick();
     expect(value.draft).toBe("@project-verify ");
-    const attachmentDropdown = wrapper.findAllComponents(NDropdown).find((dropdown) => dropdown.props("trigger") === "click")!;
-    attachmentDropdown.vm.$emit("select", "image");
-    attachmentDropdown.vm.$emit("select", "file");
-    expect(wrapper.emitted("chooseImage")).toHaveLength(1);
-    expect(wrapper.emitted("chooseFiles")).toHaveLength(1);
+    await wrapper.get('button[aria-label="添加附件"]').trigger("click");
+    expect(wrapper.emitted("chooseAttachments")).toHaveLength(1);
+  });
+
+  it("leaves pasted text in the composer and routes pasted files through attachments", async () => {
+    const { wrapper } = mountPane();
+    const textarea = wrapper.get("textarea");
+    await textarea.trigger("paste", { clipboardData: { files: [], items: [{ kind: "string", type: "text/plain" }], getData: () => "E:\\Work\\notes.txt" } });
+    expect(wrapper.emitted("pasteAttachments")).toBeUndefined();
+    await textarea.trigger("paste", { clipboardData: { files: [{ path: "E:\\Work\\notes.txt" }], items: [{ kind: "file", type: "text/plain" }], getData: () => "" } });
+    expect(wrapper.emitted("pasteAttachments")?.at(-1)).toEqual([["E:\\Work\\notes.txt"]]);
   });
 
   it("scrolls the current pane to the bottom when ArrowDown is pressed on an empty composer", async () => {

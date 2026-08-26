@@ -1,5 +1,5 @@
-import { contextBridge, ipcRenderer } from "electron";
-import type { ConnectionState, FileReference, MediaAttachment, ProtocolEvent, SafeRequest, ServerResponse } from "../shared/contracts.js";
+import { contextBridge, ipcRenderer, webUtils } from "electron";
+import type { AttachmentBatch, ConnectionState, MediaAttachment, ProtocolEvent, SafeRequest, ServerResponse } from "../shared/contracts.js";
 import type { WorkspaceState } from "../main/persistence.js";
 
 const api = {
@@ -9,9 +9,9 @@ const api = {
   reconnect: (): Promise<void> => ipcRenderer.invoke("codex:reconnect"),
   setAppServerWorkingDirectory: (path: string | null): Promise<void> => ipcRenderer.invoke("codex:working-directory", path),
   chooseDirectory: (): Promise<string | null> => ipcRenderer.invoke("dialog:directory"),
-  chooseImage: (limit: number): Promise<MediaAttachment[]> => ipcRenderer.invoke("media:choose", limit),
-  chooseFiles: (limit: number): Promise<FileReference[]> => ipcRenderer.invoke("file:choose", limit),
-  pasteClipboardImage: (): Promise<MediaAttachment> => ipcRenderer.invoke("media:clipboard"),
+  chooseAttachments: (limit: number): Promise<AttachmentBatch> => ipcRenderer.invoke("attachment:choose", limit),
+  pasteAttachments: (paths: string[], limit: number): Promise<AttachmentBatch> => ipcRenderer.invoke("attachment:paste", paths, limit),
+  resolveFilePaths: (files: File[]): string[] => files.map((file) => webUtils.getPathForFile(file)).filter(Boolean),
   importImagePath: (path: string): Promise<MediaAttachment> => ipcRenderer.invoke("media:path", path),
   addRemoteImage: (url: string): Promise<MediaAttachment> => ipcRenderer.invoke("media:remote", url),
   saveWorkspace: (state: WorkspaceState): Promise<void> => ipcRenderer.invoke("workspace:save", state),

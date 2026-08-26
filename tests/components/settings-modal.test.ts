@@ -36,15 +36,17 @@ describe("SettingsModal", () => {
 
   it("applies the configured font family and size to application and component tokens", () => {
     const appearance = { theme: "dark" as const, fontFamily: "Microsoft YaHei UI", fontSize: 18, accentColor: "#10a37f", commandShellPath: "", mcpGatewayAdaptation: false };
-    expect(appearanceCssVars(appearance)).toMatchObject({ "--app-font-family": "Microsoft YaHei UI", "--app-font-size": "18px", "--app-diff-add": "#213a2b", "--app-diff-delete": "#4a221d" });
+    expect(appearanceCssVars(appearance)).toMatchObject({ "--app-font-family": "Microsoft YaHei UI", "--app-font-size": "18px", "--app-control-border": "#4a4a4a", "--app-diff-add": "#213a2b", "--app-diff-delete": "#4a221d" });
     expect(appearanceThemeOverrides(appearance).common).toMatchObject({ fontFamily: "Microsoft YaHei UI", fontFamilyMono: "Microsoft YaHei UI", fontSize: "18px", fontSizeTiny: "16px", fontSizeSmall: "17px", fontSizeMedium: "18px" });
   });
 
-  it("allows a command shell path to be edited or cleared and has an explicit close action", async () => {
+  it("labels the PowerShell wrapper path clearly, allows it to be cleared, and has an explicit close action", async () => {
     const pinia = createPinia();
     const wrapper = mount(SettingsModal, { props: { show: true, commandShellPath: "C:\\Program Files\\PowerShell\\7\\pwsh.exe" }, global: { plugins: [pinia], stubs: { teleport: true } } });
     const shellInput = wrapper.findAllComponents(NInput).find((input) => input.props("placeholder")?.includes("PowerShell"));
     expect(shellInput).toBeTruthy();
+    expect(wrapper.text()).toContain("PowerShell 7 路径");
+    expect(wrapper.findAll(".settings-note")).toHaveLength(0);
     shellInput!.vm.$emit("update:value", "");
     expect(wrapper.emitted("update:commandShellPath")?.at(-1)).toEqual([""]);
     await wrapper.findAll("button").find((button) => button.text() === "完成")!.trigger("click");
@@ -74,6 +76,6 @@ describe("SettingsModal", () => {
     await buttons.find((button) => button.text().includes("清空"))!.trigger("click");
     expect(choose).toHaveBeenCalledOnce();
     expect(clear).toHaveBeenCalledOnce();
-    expect(wrapper.text()).toContain("/cwd");
+    expect(wrapper.text()).not.toContain("/cwd");
   });
 });

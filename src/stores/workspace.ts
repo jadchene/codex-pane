@@ -1,4 +1,4 @@
-import { computed, ref, watch } from "vue";
+import { computed, markRaw, ref, shallowReactive, watch } from "vue";
 import { defineStore } from "pinia";
 import type { ConnectionState, ProtocolEvent } from "../../electron/shared/contracts";
 import type { AppearanceSettings, AppState, ApprovalReviewState, BackgroundTerminalState, LayoutKind, McpServerState, ModelOption, PaneState, PendingServerRequest, SubAgentRuntimeState, ThreadSummary, UiItem, UiItemStatus } from "../types";
@@ -19,6 +19,8 @@ const DEFAULT_APPEARANCE: AppearanceSettings = {
   commandShellPath: "C:\\Program Files\\PowerShell\\7\\pwsh.exe",
   mcpGatewayAdaptation: false
 };
+const HISTORY_TURN_PAGE_SIZE = 12;
+const LAYOUT_PANE_COUNTS: Record<LayoutKind, number> = { single: 1, vertical: 2, horizontal: 2, quad: 4, fourColumns: 4, fourRows: 4, six: 6 };
 
 const createPane = (index: number): PaneState => ({
   id: `pane-${index + 1}`,
@@ -46,7 +48,9 @@ const createPane = (index: number): PaneState => ({
   error: null,
   unread: false,
   scrollTop: 0,
-  followTail: true
+  followTail: true,
+  historyCursor: null,
+  historyLoading: false
 });
 
 const getRecord = (value: unknown): Record<string, unknown> => value && typeof value === "object" ? value as Record<string, unknown> : {};
@@ -85,11 +89,53 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   const threadCreations = new Map<string, Promise<string>>();
   const sendsInFlight = new Set<string>();
   const responsesInFlight = new Set<string>();
-  const deltaBuffers = new Map<string, { item: UiItem; text: string; timer: ReturnType<typeof setTimeout> }>();
+  const deltaBuffers = new Map<string, { item: UiItem; text: string }>();
+  let deltaFlushFrame: number | null = null;
+  const paneItemIndexes = new Map<string, Map<string, UiItem>>();
+  const historyRequestTokens = new Map<string, symbol>();
   let preparedGeneration = -1;
   let threadListRequestId = 0;
 
-  const visiblePaneCount = computed(() => state.value.layout === "single" ? 1 : state.value.layout === "quad" ? 4 : state.value.layout === "six" ? 6 : 2);
+  const itemKey = (turnId: string, itemId: string): string => `${turnId}:${itemId}`;
+  const createUiItem = (value: UiItem): UiItem => shallowReactive({ ...value, data: markRaw(value.data) });
+  const indexPaneItems = (pane: PaneState): void => {
+    paneItemIndexes.set(pane.id, new Map(pane.items.map((item) => [itemKey(item.turnId, item.id), item])));
+  };
+  const findPaneItem = (pane: PaneState, itemId: string, turnId: string): UiItem | undefined => {
+    let index = paneItemIndexes.get(pane.id);
+    if (!index) {
+      indexPaneItems(pane);
+      index = paneItemIndexes.get(pane.id)!;
+    }
+    return index.get(itemKey(turnId, itemId));
+  };
+  const appendPaneItem = (pane: PaneState, item: UiItem): UiItem => {
+    const reactiveItem = createUiItem(item);
+    pane.items.push(reactiveItem);
+    let index = paneItemIndexes.get(pane.id);
+    if (!index) {
+      index = new Map();
+      paneItemIndexes.set(pane.id, index);
+    }
+    index.set(itemKey(reactiveItem.turnId, reactiveItem.id), reactiveItem);
+    return reactiveItem;
+  };
+  const discardPaneDeltas = (paneId: string): void => {
+    for (const key of deltaBuffers.keys()) {
+      if (key.startsWith(`${paneId}:`)) deltaBuffers.delete(key);
+    }
+    if (!deltaBuffers.size && deltaFlushFrame !== null) {
+      window.cancelAnimationFrame(deltaFlushFrame);
+      deltaFlushFrame = null;
+    }
+  };
+  const discardAllDeltas = (): void => {
+    deltaBuffers.clear();
+    if (deltaFlushFrame !== null) window.cancelAnimationFrame(deltaFlushFrame);
+    deltaFlushFrame = null;
+  };
+
+  const visiblePaneCount = computed(() => LAYOUT_PANE_COUNTS[state.value.layout]);
   const visiblePanes = computed(() => {
     const panes = state.value.panes.slice(0, visiblePaneCount.value);
     if (state.value.focusedPaneId) {
@@ -139,7 +185,9 @@ export const useWorkspaceStore = defineStore("workspace", () => {
         backgroundTerminals: [],
         subAgents: {},
         error: null,
-        unread: false
+        unread: false,
+        historyCursor: null,
+        historyLoading: false
       }));
       while (state.value.panes.length < 6) {
         state.value.panes.push(createPane(state.value.panes.length));
@@ -169,7 +217,10 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     const generationChanged = state.value.connection.generation !== connection.generation;
     const becameReady = state.value.connection.phase !== "ready" && connection.phase === "ready";
     state.value.connection = connection;
-    if (generationChanged) state.value.pendingRequests = state.value.pendingRequests.filter((request) => request.generation === connection.generation);
+    if (generationChanged) {
+      state.value.pendingRequests = state.value.pendingRequests.filter((request) => request.generation === connection.generation);
+      discardAllDeltas();
+    }
     if (becameReady) {
       void prepareConnection(connection.generation);
     }
@@ -192,6 +243,12 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   };
 
   const handleProtocolEvent = (event: ProtocolEvent): void => {
+    if (event.kind === "notification-batch") {
+      if (Array.isArray(event.payload)) {
+        for (const nested of event.payload) handleProtocolEvent(nested as ProtocolEvent);
+      }
+      return;
+    }
     if (event.generation !== state.value.connection.generation) return;
     if (event.kind === "server-request") {
       addServerRequest(event);
@@ -360,18 +417,23 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     }
     flushDelta(`${pane.id}:${turnId}:${itemId}`);
     const clientId = getString(item.clientId);
-    const existing = pane.items.find((candidate) =>
-      (candidate.id === itemId && candidate.turnId === turnId)
-      || (clientId && candidate.type === "userMessage" && getString(candidate.data.clientId) === clientId)
-    );
+    const existing = findPaneItem(pane, itemId, turnId) ?? (clientId
+      ? pane.items.find((candidate) => candidate.type === "userMessage" && getString(candidate.data.clientId) === clientId)
+      : undefined);
     if (existing) {
+      const previousKey = itemKey(existing.turnId, existing.id);
       existing.id = itemId;
       existing.turnId = turnId;
-      existing.data = item;
+      existing.data = markRaw(item);
       existing.type = getString(item.type) ?? existing.type;
       existing.status = resolveItemStatus(item, completed);
       if (completed && existing.type === "reasoning" && !hasReasoningContent(existing)) {
         pane.items = pane.items.filter((candidate) => candidate !== existing);
+        paneItemIndexes.get(pane.id)?.delete(previousKey);
+      } else {
+        const index = paneItemIndexes.get(pane.id);
+        index?.delete(previousKey);
+        index?.set(itemKey(existing.turnId, existing.id), existing);
       }
       syncSubAgentState(pane, existing);
       return;
@@ -385,8 +447,8 @@ export const useWorkspaceStore = defineStore("workspace", () => {
       streamText: "",
       status: resolveItemStatus(item, completed)
     };
-    pane.items.push(nextItem);
-    syncSubAgentState(pane, nextItem);
+    const appendedItem = appendPaneItem(pane, nextItem);
+    syncSubAgentState(pane, appendedItem);
   };
 
   const resolveItemStatus = (item: Record<string, unknown>, completed: boolean): UiItemStatus => {
@@ -441,9 +503,12 @@ export const useWorkspaceStore = defineStore("workspace", () => {
       streamText: "",
       status: next.status === "inProgress" ? "running" : next.status === "denied" ? "declined" : next.status === "approved" ? "completed" : "failed"
     };
-    const itemIndex = pane.items.findIndex((candidate) => candidate.id === itemId && candidate.turnId === next.turnId);
-    if (itemIndex >= 0) pane.items[itemIndex] = item;
-    else pane.items.push(item);
+    const existingItem = findPaneItem(pane, itemId, next.turnId);
+    if (existingItem) {
+      Object.assign(existingItem, createUiItem(item));
+    } else {
+      appendPaneItem(pane, item);
+    }
   };
 
   const mergeFileChangePatch = (pane: PaneState, params: Record<string, unknown>): void => {
@@ -451,13 +516,13 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     const turnId = getString(params.turnId) ?? pane.activeTurnId ?? "unknown-turn";
     if (!itemId) return;
     const changes = Array.isArray(params.changes) ? params.changes.map(getRecord) : [];
-    const item = pane.items.find((candidate) => candidate.id === itemId && candidate.turnId === turnId);
+    const item = findPaneItem(pane, itemId, turnId);
     if (item) {
       item.type = "fileChange";
-      item.data = { ...item.data, changes };
+      item.data = markRaw({ ...item.data, changes });
       return;
     }
-    pane.items.push({ id: itemId, turnId, type: "fileChange", data: { id: itemId, type: "fileChange", changes, status: "inProgress" }, streamText: "", status: "running" });
+    appendPaneItem(pane, { id: itemId, turnId, type: "fileChange", data: { id: itemId, type: "fileChange", changes, status: "inProgress" }, streamText: "", status: "running" });
   };
 
   const mergeMcpProgress = (pane: PaneState, params: Record<string, unknown>): void => {
@@ -465,8 +530,8 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     const turnId = getString(params.turnId) ?? pane.activeTurnId ?? "unknown-turn";
     const message = getString(params.message);
     if (!itemId || !message) return;
-    const item = pane.items.find((candidate) => candidate.id === itemId && candidate.turnId === turnId);
-    if (item) item.data = { ...item.data, progressMessage: message };
+    const item = findPaneItem(pane, itemId, turnId);
+    if (item) item.data = markRaw({ ...item.data, progressMessage: message });
   };
 
   const syncSubAgentState = (pane: PaneState, item: UiItem): void => {
@@ -502,26 +567,33 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     if (!itemId) {
       return;
     }
-    let item = pane.items.find((candidate) => candidate.id === itemId && candidate.turnId === turnId);
+    let item = findPaneItem(pane, itemId, turnId);
     if (!item) {
-      item = { id: itemId, turnId, type: "stream", data: {}, streamText: "", status: "running" };
-      pane.items.push(item);
+      item = appendPaneItem(pane, { id: itemId, turnId, type: "stream", data: {}, streamText: "", status: "running" });
     }
     const delta = getString(params.delta) ?? getString(params.output) ?? "";
+    if (document.visibilityState === "hidden") {
+      item.streamText += delta;
+      return;
+    }
     const key = `${pane.id}:${turnId}:${itemId}`;
     const buffered = deltaBuffers.get(key);
     if (buffered) {
       buffered.text += delta;
       return;
     }
-    const timer = setTimeout(() => flushDelta(key), 32);
-    deltaBuffers.set(key, { item, text: delta, timer });
+    deltaBuffers.set(key, { item, text: delta });
+    if (deltaFlushFrame === null) {
+      deltaFlushFrame = window.requestAnimationFrame(() => {
+        deltaFlushFrame = null;
+        for (const bufferedKey of [...deltaBuffers.keys()]) flushDelta(bufferedKey);
+      });
+    }
   };
 
   const flushDelta = (key: string): void => {
     const buffered = deltaBuffers.get(key);
     if (!buffered) return;
-    clearTimeout(buffered.timer);
     buffered.item.streamText += buffered.text;
     deltaBuffers.delete(key);
   };
@@ -776,10 +848,18 @@ export const useWorkspaceStore = defineStore("workspace", () => {
       if (existing) return [existing];
       const requestedThreadId = pane.threadId;
       pane.status = "starting";
-      const operation = window.codexPane.request({ method: "thread/resume", params: { threadId: requestedThreadId, excludeTurns: false } })
+      const operation = window.codexPane.request({
+        method: "thread/resume",
+        params: {
+          threadId: requestedThreadId,
+          excludeTurns: true,
+          initialTurnsPage: { limit: HISTORY_TURN_PAGE_SIZE, sortDirection: "desc", itemsView: "full" }
+        }
+      })
         .then((response) => {
           if (pane.threadId !== requestedThreadId) return;
-          hydrateThread(pane, getRecord(getRecord(response).thread));
+          const result = getRecord(response);
+          hydrateThread(pane, getRecord(result.thread), getRecord(result.initialTurnsPage));
           pane.error = null;
         })
         .catch((error) => {
@@ -794,11 +874,11 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     await Promise.all(operations);
   };
 
-  const loadThreads = async (searchTerm = ""): Promise<void> => {
+  const loadThreads = async (searchTerm = "", cwd: string | null = null): Promise<void> => {
     const requestId = ++threadListRequestId;
     const response = getRecord(await window.codexPane.request({
       method: "thread/list",
-      params: { limit: 100, sortKey: "updated_at", sortDirection: "desc", searchTerm: searchTerm || null }
+      params: { limit: 100, sortKey: "updated_at", sortDirection: "desc", searchTerm: searchTerm || null, cwd }
     }));
     if (requestId !== threadListRequestId) return;
     const data = Array.isArray(response.data) ? response.data : [];
@@ -825,8 +905,15 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     }
     pane.status = "starting";
     try {
-      const response = getRecord(await window.codexPane.request({ method: "thread/resume", params: { threadId, excludeTurns: false } }));
-      hydrateThread(pane, getRecord(response.thread));
+      const response = getRecord(await window.codexPane.request({
+        method: "thread/resume",
+        params: {
+          threadId,
+          excludeTurns: true,
+          initialTurnsPage: { limit: HISTORY_TURN_PAGE_SIZE, sortDirection: "desc", itemsView: "full" }
+        }
+      }));
+      hydrateThread(pane, getRecord(response.thread), getRecord(response.initialTurnsPage));
       pane.cwd = getString(response.cwd) ?? pane.cwd;
       pane.model = getString(response.model) ?? pane.model;
       pane.effort = getString(response.reasoningEffort) ?? pane.effort;
@@ -840,13 +927,26 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     }
   };
 
-  const hydrateThread = (pane: PaneState, thread: Record<string, unknown>): void => {
+  const createItemsFromTurns = (rawTurns: unknown[]): UiItem[] => rawTurns.flatMap((rawTurn) => {
+    const turn = getRecord(rawTurn);
+    const turnId = getString(turn.id) ?? "unknown-turn";
+    const items = Array.isArray(turn.items) ? turn.items : [];
+    return items.map((rawItem): UiItem => {
+      const item = getRecord(rawItem);
+      return createUiItem({ id: getString(item.id) ?? crypto.randomUUID(), turnId, type: getString(item.type) ?? "unknown", data: item, streamText: "", status: resolveItemStatus(item, getString(turn.status) !== "inProgress") });
+    });
+  });
+
+  const hydrateThread = (pane: PaneState, thread: Record<string, unknown>, historyPage: Record<string, unknown> | null = null): void => {
+    discardPaneDeltas(pane.id);
+    historyRequestTokens.delete(pane.id);
     const threadId = getString(thread.id);
     if (threadId) {
       pane.threadId = threadId;
     }
     pane.title = getString(thread.name) || defaultPaneTitle(pane);
-    const turns = Array.isArray(thread.turns) ? thread.turns : [];
+    const pagedTurns = historyPage && Array.isArray(historyPage.data) ? [...historyPage.data].reverse() : null;
+    const turns = pagedTurns ?? (Array.isArray(thread.turns) ? thread.turns : []);
     const activeTurn = [...turns].reverse().map(getRecord).find((turn) => getString(turn.status) === "inProgress") ?? null;
     pane.activeTurnId = activeTurn ? getString(activeTurn.id) : null;
     pane.status = pane.activeTurnId ? "running" : "idle";
@@ -857,16 +957,45 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     pane.backgroundTerminals = [];
     pane.subAgents = {};
     pane.activePermissionProfile = null;
-    pane.items = turns.flatMap((rawTurn) => {
-      const turn = getRecord(rawTurn);
-      const turnId = getString(turn.id) ?? "unknown-turn";
-      const items = Array.isArray(turn.items) ? turn.items : [];
-      return items.map((rawItem): UiItem => {
-        const item = getRecord(rawItem);
-        return { id: getString(item.id) ?? crypto.randomUUID(), turnId, type: getString(item.type) ?? "unknown", data: item, streamText: "", status: resolveItemStatus(item, getString(turn.status) !== "inProgress") };
-      });
-    });
+    pane.items = createItemsFromTurns(turns);
+    pane.historyCursor = historyPage ? getString(historyPage.nextCursor) : null;
+    pane.historyLoading = false;
+    indexPaneItems(pane);
     for (const item of pane.items) syncSubAgentState(pane, item);
+  };
+
+  const loadOlderTurns = async (pane: PaneState): Promise<void> => {
+    if (!pane.threadId || !pane.historyCursor || pane.historyLoading) return;
+    pane.historyLoading = true;
+    const requestedThreadId = pane.threadId;
+    const cursor = pane.historyCursor;
+    const requestToken = Symbol("history-request");
+    historyRequestTokens.set(pane.id, requestToken);
+    try {
+      const response = getRecord(await window.codexPane.request({
+        method: "thread/turns/list",
+        params: { threadId: requestedThreadId, cursor, limit: HISTORY_TURN_PAGE_SIZE, sortDirection: "desc", itemsView: "full" }
+      }));
+      if (historyRequestTokens.get(pane.id) !== requestToken || pane.threadId !== requestedThreadId || pane.historyCursor !== cursor) return;
+      const turns = Array.isArray(response.data) ? [...response.data].reverse() : [];
+      const knownItems = paneItemIndexes.get(pane.id) ?? new Map<string, UiItem>();
+      const olderItems = createItemsFromTurns(turns).filter((item) => !knownItems.has(itemKey(item.turnId, item.id)));
+      if (olderItems.length) {
+        pane.items = [...olderItems, ...pane.items];
+        indexPaneItems(pane);
+        for (const item of olderItems) syncSubAgentState(pane, item);
+      }
+      pane.historyCursor = getString(response.nextCursor);
+    } catch (error) {
+      if (historyRequestTokens.get(pane.id) === requestToken && pane.threadId === requestedThreadId) {
+        pane.error = `无法加载更早内容：${error instanceof Error ? error.message : String(error)}`;
+      }
+    } finally {
+      if (historyRequestTokens.get(pane.id) === requestToken) {
+        historyRequestTokens.delete(pane.id);
+        pane.historyLoading = false;
+      }
+    }
   };
 
   const defaultPaneTitle = (pane: PaneState): string => {
@@ -939,7 +1068,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
       status: "running"
     };
     sendsInFlight.add(pane.id);
-    pane.items.push(optimisticItem);
+    appendPaneItem(pane, optimisticItem);
     if (pane.title === "新会话" && text) pane.title = text.slice(0, 48);
     pane.status = "running";
     pane.error = null;
@@ -952,6 +1081,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
         { type: "text"; text: string; text_elements: unknown[] }
         | { type: "managedImage"; id: string; detail: "high" }
         | { type: "managedRemoteImage"; url: string; detail: "high" }
+        | { type: "managedFile"; id: string; name: string }
         | { type: "skill"; name: string; path: string }
         | { type: "mention"; name: string; path: string }
       > = [];
@@ -959,7 +1089,11 @@ export const useWorkspaceStore = defineStore("workspace", () => {
         input.push({ type: "text", text, text_elements: [] });
       }
       for (const skill of submittedSkills) input.push({ type: "skill", name: skill.name, path: skill.path });
-      for (const reference of submittedReferences) input.push({ type: "mention", name: reference.name, path: reference.path });
+      for (const reference of submittedReferences) {
+        input.push(reference.managed
+          ? { type: "managedFile", id: reference.id, name: reference.name }
+          : { type: "mention", name: reference.name, path: reference.path });
+      }
       for (const attachment of submittedAttachments) {
         if (attachment.kind === "remote") {
           if (!attachment.sourceUrl) throw new Error("远程图片地址已失效，请移除后重新添加。" );
@@ -980,6 +1114,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
       pane.error = error instanceof Error ? error.message : String(error);
       if (optimisticItem.id === optimisticId) {
         pane.items = pane.items.filter((item) => item !== optimisticItem);
+        paneItemIndexes.get(pane.id)?.delete(itemKey(optimisticItem.turnId, optimisticItem.id));
         if (text) pane.draft = pane.draft ? `${text}\n${pane.draft}` : text;
         const currentAttachmentIds = new Set(pane.attachments.map((attachment) => attachment.id));
         pane.attachments = [...submittedAttachments.filter((attachment) => !currentAttachmentIds.has(attachment.id)), ...pane.attachments];
@@ -1128,6 +1263,11 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     pane.activeTurnId = null;
     pane.status = "idle";
     pane.items = [];
+    discardPaneDeltas(pane.id);
+    paneItemIndexes.delete(pane.id);
+    historyRequestTokens.delete(pane.id);
+    pane.historyCursor = null;
+    pane.historyLoading = false;
     pane.tokenUsage = null;
     pane.contextRemainingPercent = null;
     pane.turnDiff = "";
@@ -1139,6 +1279,36 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     pane.error = null;
     pane.unread = false;
     scheduleSave();
+  };
+
+  const resetPane = (pane: PaneState): void => {
+    discardPaneDeltas(pane.id);
+    paneItemIndexes.delete(pane.id);
+    historyRequestTokens.delete(pane.id);
+    pane.title = "新会话";
+    pane.threadId = null;
+    pane.draft = "";
+    pane.attachments = [];
+    pane.references = [];
+    pane.skills = [];
+    pane.activePermissionProfile = null;
+    pane.activeTurnId = null;
+    pane.status = "idle";
+    pane.items = [];
+    pane.tokenUsage = null;
+    pane.contextRemainingPercent = null;
+    pane.turnDiff = "";
+    pane.activeFlags = [];
+    pane.approvalReviews = [];
+    pane.strictReviewRequired = false;
+    pane.backgroundTerminals = [];
+    pane.subAgents = {};
+    pane.error = null;
+    pane.unread = false;
+    pane.scrollTop = 0;
+    pane.followTail = true;
+    pane.historyCursor = null;
+    pane.historyLoading = false;
   };
 
   const setLayout = (layout: LayoutKind): void => {
@@ -1192,54 +1362,38 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     scheduleSave();
   };
 
-  const addClipboardImage = async (pane: PaneState): Promise<void> => {
-    if (pane.attachments.length >= 20) {
-      pane.error = "每个窗格最多添加 20 张图片，请先移除部分附件。";
+  const addAttachmentBatch = (pane: PaneState, batch: { images: PaneState["attachments"]; files: PaneState["references"] }): void => {
+    pane.attachments.push(...batch.images);
+    pane.references.push(...batch.files);
+    pane.error = null;
+    scheduleSave();
+  };
+
+  const chooseAttachments = async (pane: PaneState): Promise<void> => {
+    const available = 20 - pane.attachments.length - pane.references.length;
+    if (available <= 0) {
+      pane.error = "每个窗格最多添加 20 个附件，请先移除部分附件。";
       return;
     }
     try {
-      const attachment = await window.codexPane.pasteClipboardImage();
-      pane.attachments.push(attachment);
-      pane.error = null;
-      scheduleSave();
+      const batch = await window.codexPane.chooseAttachments(available);
+      if (batch.images.length || batch.files.length) addAttachmentBatch(pane, batch);
     } catch (error) {
-      pane.error = `无法粘贴图片：${error instanceof Error ? error.message : String(error)}`;
+      pane.error = `无法添加附件：${error instanceof Error ? error.message : String(error)}`;
     }
   };
 
-  const chooseImage = async (pane: PaneState): Promise<void> => {
-    const available = 20 - pane.attachments.length;
+  const pasteAttachments = async (pane: PaneState, paths: string[]): Promise<void> => {
+    const available = 20 - pane.attachments.length - pane.references.length;
     if (available <= 0) {
-      pane.error = "每个窗格最多添加 20 张图片，请先移除部分附件。";
+      pane.error = "每个窗格最多添加 20 个附件，请先移除部分附件。";
       return;
     }
     try {
-      const attachments = await window.codexPane.chooseImage(available);
-      if (attachments.length) {
-        pane.attachments.push(...attachments);
-        pane.error = null;
-        scheduleSave();
-      }
+      const batch = await window.codexPane.pasteAttachments(paths, available);
+      if (batch.images.length || batch.files.length) addAttachmentBatch(pane, batch);
     } catch (error) {
-      pane.error = `无法添加图片：${error instanceof Error ? error.message : String(error)}`;
-    }
-  };
-
-  const chooseFiles = async (pane: PaneState): Promise<void> => {
-    const available = 20 - pane.references.length;
-    if (available <= 0) {
-      pane.error = "每个窗格最多添加 20 个文件，请先移除部分附件。";
-      return;
-    }
-    try {
-      const references = await window.codexPane.chooseFiles(available);
-      if (references.length) {
-        pane.references.push(...references);
-        pane.error = null;
-        scheduleSave();
-      }
-    } catch (error) {
-      pane.error = `无法添加文件：${error instanceof Error ? error.message : String(error)}`;
+      pane.error = `无法粘贴附件：${error instanceof Error ? error.message : String(error)}`;
     }
   };
 
@@ -1260,29 +1414,6 @@ export const useWorkspaceStore = defineStore("workspace", () => {
       updatePaneSkills(pane, result);
     } catch (error) {
       pane.error = `无法读取 Skills：${error instanceof Error ? error.message : String(error)}`;
-    }
-  };
-
-  const addPastedReference = async (pane: PaneState, value: string): Promise<void> => {
-    const text = value.trim();
-    const isRemoteImage = /^https:\/\//i.test(text) && /\.(png|jpe?g|webp|gif|bmp)(?:[?#].*)?$/i.test(text);
-    const isLocalImage = /^(?:[a-z]:\\|\\\\).+\.(png|jpe?g|webp|gif|bmp)$/i.test(text.replace(/^['\"]|['\"]$/g, ""));
-    if (!isRemoteImage && !isLocalImage) {
-      return;
-    }
-    if (pane.attachments.length >= 20) {
-      pane.error = "每个窗格最多添加 20 张图片，请先移除部分附件。";
-      return;
-    }
-    try {
-      const attachment = isRemoteImage
-        ? await window.codexPane.addRemoteImage(text)
-        : await window.codexPane.importImagePath(text);
-      pane.attachments.push(attachment);
-      pane.error = null;
-      scheduleSave();
-    } catch (error) {
-      pane.error = `无法添加图片地址：${error instanceof Error ? error.message : String(error)}`;
     }
   };
 
@@ -1375,6 +1506,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     handleItemAction,
     interrupt,
     newThread,
+    resetPane,
     setLayout,
     toggleFocus,
     setSplitSizes,
@@ -1382,13 +1514,12 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     chooseDirectory,
     chooseDefaultDirectory,
     clearDefaultDirectory,
-    addClipboardImage,
-    chooseImage,
-    chooseFiles,
+    chooseAttachments,
+    pasteAttachments,
     refreshSkills,
-    addPastedReference,
     loadThreads,
     resumeThread,
+    loadOlderTurns,
     removeAttachment,
     removeReference,
     clearUnread,
