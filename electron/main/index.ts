@@ -32,12 +32,12 @@ if (!app.isPackaged && existsSync(join(app.getAppPath(), ".user-approval-fixture
   useCodexArgsPrefixForTests(["-c", "approvals_reviewer='user'"]);
 }
 
-const legacyUserDataPath = app.getPath("userData");
+const fallbackUserDataPath = join(app.getPath("appData"), app.getName());
 const userDataLocation = prepareUserDataLocation({
   explicitPath: process.env.CODEX_PANE_USER_DATA_DIR,
   executablePath: app.getPath("exe"),
   applicationPath: app.getAppPath(),
-  legacyUserDataPath,
+  fallbackUserDataPath,
   packaged: app.isPackaged
 });
 app.setPath("userData", userDataLocation.path);

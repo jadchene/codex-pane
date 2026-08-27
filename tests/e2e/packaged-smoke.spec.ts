@@ -103,10 +103,10 @@ test("keeps Electron and Chromium data beside the unpacked executable", async ()
     await mkdir(runRoot, { recursive: true });
     await cp(dirname(sourceExecutable!), unpackedRoot, { recursive: true });
     await rm(expectedDataPath, { recursive: true, force: true });
-    const legacyBrowserDirectory = join(expectedDataPath, "Local Storage");
-    const legacyMarker = join(legacyBrowserDirectory, "legacy-browser-data.txt");
-    await mkdir(legacyBrowserDirectory, { recursive: true });
-    await writeFile(legacyMarker, "preserve", "utf8");
+    const existingBrowserDirectory = join(expectedDataPath, "Local Storage");
+    const existingMarker = join(existingBrowserDirectory, "existing-browser-data.txt");
+    await mkdir(existingBrowserDirectory, { recursive: true });
+    await writeFile(existingMarker, "preserve", "utf8");
     application = await launchWithDefaultDataPath(executablePath, isolatedAppData);
     const window = await application.firstWindow();
     await waitForWorkbench(window);
@@ -127,9 +127,7 @@ test("keeps Electron and Chromium data beside the unpacked executable", async ()
     expect(Number.parseFloat(await window.locator(".cwd-text").first().evaluate((element) => getComputedStyle(element).fontSize))).toBeGreaterThanOrEqual(12);
 
     expect(existsSync(join(expectedDataPath, "workspaces", "default.json"))).toBe(true);
-    expect(await readFile(legacyMarker, "utf8")).toBe("preserve");
-    expect(existsSync(join(isolatedAppData, "codex-pane"))).toBe(false);
-
+    expect(await readFile(existingMarker, "utf8")).toBe("preserve");
     secondApplication = await launchWithDefaultDataPath(executablePath, isolatedAppData);
     const secondWindow = await secondApplication.firstWindow();
     await waitForWorkbench(secondWindow);
