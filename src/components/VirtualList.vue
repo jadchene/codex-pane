@@ -68,6 +68,7 @@ const measuredSizes = new Map<string, number>();
 let keyIndexes = new Map<string, number>();
 let sizes = new FenwickTree([]);
 let rangeFrame: number | null = null;
+let tailFrame: number | null = null;
 let rowObserver: ResizeObserver | null = null;
 let widthObserver: ResizeObserver | null = null;
 let observedWidth = 0;
@@ -75,11 +76,29 @@ let currentAnchorKey: string | null = null;
 let currentViewportAnchorKey: string | null = null;
 let currentViewportAnchorOffset = 0;
 let tailDetached = false;
+let lastScrollTop = 0;
 const observedRows = new Map<string, Element>();
 
 const visibleItems = computed(() => props.items.slice(startIndex.value, endIndex.value));
 const estimatedSize = (item: TItem): number => Math.max(props.minItemSize, props.estimateSize?.(item) ?? props.minItemSize);
 const followsTail = (): boolean => props.followTail && !tailDetached;
+const pinToBottom = (element: HTMLElement): void => {
+  setScrollTop(element, element.scrollHeight);
+  lastScrollTop = element.scrollTop;
+};
+const scheduleTailPin = (force = false): void => {
+  if (tailFrame !== null) cancelAnimationFrame(tailFrame);
+  tailFrame = requestAnimationFrame(async () => {
+    tailFrame = null;
+    const element = scroller.value;
+    if (!element || !force && !followsTail()) return;
+    if (rangeFrame !== null) cancelAnimationFrame(rangeFrame);
+    updateRange();
+    await nextTick();
+    if (element !== scroller.value || !force && !followsTail()) return;
+    pinToBottom(element);
+  });
+};
 const updateRange = (): void => {
   rangeFrame = null;
   const element = scroller.value;
@@ -90,11 +109,12 @@ const updateRange = (): void => {
     bottomSpacer.value = 0;
     return;
   }
+  const overscan = Math.max(props.buffer, element.clientHeight);
   const viewportTop = followsTail() ? Math.max(0, sizes.total() - element.clientHeight) : element.scrollTop;
-  const start = sizes.indexAt(Math.max(0, viewportTop - props.buffer));
+  const start = sizes.indexAt(Math.max(0, viewportTop - overscan));
   const end = followsTail()
     ? props.items.length
-    : Math.min(props.items.length, sizes.indexAt(element.scrollTop + element.clientHeight + props.buffer) + 1);
+    : Math.min(props.items.length, sizes.indexAt(element.scrollTop + element.clientHeight + overscan) + 1);
   startIndex.value = start;
   endIndex.value = Math.max(start + 1, end);
   currentAnchorKey = props.itemKey(props.items[start]!);
@@ -109,21 +129,25 @@ const scheduleRangeUpdate = (): void => {
 };
 const rebuild = async (): Promise<void> => {
   const element = scroller.value;
-  const anchorKey = followsTail() ? null : currentViewportAnchorKey ?? currentAnchorKey;
+  const keepFollowing = followsTail();
+  const anchorKey = keepFollowing ? null : currentViewportAnchorKey ?? currentAnchorKey;
   const anchorOffset = currentViewportAnchorKey ? currentViewportAnchorOffset : element ? element.scrollTop - sizes.prefix(startIndex.value) : 0;
   keyIndexes = new Map(props.items.map((item, index) => [props.itemKey(item), index]));
   for (const key of measuredSizes.keys()) {
     if (!keyIndexes.has(key)) measuredSizes.delete(key);
   }
   sizes = new FenwickTree(props.items.map((item) => measuredSizes.get(props.itemKey(item)) ?? estimatedSize(item)));
-  if (element && followsTail()) {
-    setScrollTop(element, sizes.total());
-  } else if (element && anchorKey) {
+  if (element && anchorKey) {
     const nextAnchorIndex = keyIndexes.get(anchorKey);
     if (nextAnchorIndex !== undefined) setScrollTop(element, Math.max(0, sizes.prefix(nextAnchorIndex) + anchorOffset));
   }
   updateRange();
   await nextTick();
+  if (element && keepFollowing && followsTail()) pinToBottom(element);
+  else if (element && anchorKey) {
+    const nextAnchorIndex = keyIndexes.get(anchorKey);
+    if (nextAnchorIndex !== undefined) setScrollTop(element, Math.max(0, sizes.prefix(nextAnchorIndex) + anchorOffset));
+  }
   scheduleRangeUpdate();
 };
 const observeRow = (element: Element | null, item: TItem): void => {
@@ -145,23 +169,29 @@ const setScrollTop = (element: HTMLElement, position: number): void => {
 };
 const handleScroll = (event: Event): void => {
   const element = event.currentTarget as HTMLElement;
-  tailDetached = element.scrollHeight - element.scrollTop - element.clientHeight >= 2;
+  const gap = element.scrollHeight - element.scrollTop - element.clientHeight;
+  if (gap <= 2) tailDetached = false;
+  else if (element.scrollTop < lastScrollTop - 0.5) tailDetached = true;
+  lastScrollTop = element.scrollTop;
   scheduleRangeUpdate();
   emit("scroll", event);
 };
 const handleWheel = (event: WheelEvent): void => {
   if (event.deltaY < 0) tailDetached = true;
 };
-const scrollToBottom = (): void => {
+const scrollToBottom = (force = true): void => {
   if (!scroller.value) return;
-  tailDetached = false;
-  setScrollTop(scroller.value, sizes.total());
+  if (force) tailDetached = false;
+  if (!force && !followsTail()) return;
+  pinToBottom(scroller.value);
+  scheduleTailPin(force);
   scheduleRangeUpdate();
 };
 const scrollToPosition = (position: number): void => {
   if (!scroller.value) return;
   tailDetached = scroller.value.scrollHeight - position - scroller.value.clientHeight >= 2;
   setScrollTop(scroller.value, Math.max(0, position));
+  lastScrollTop = scroller.value.scrollTop;
   scheduleRangeUpdate();
 };
 
@@ -186,7 +216,7 @@ onMounted(() => {
       sizes.add(index, nextSize - previousSize);
       changed = true;
     }
-    if (element && changed && followsTail()) setScrollTop(element, sizes.total());
+    if (element && changed && followsTail()) scheduleTailPin();
     scheduleRangeUpdate();
   });
   widthObserver = new ResizeObserver((entries) => {
@@ -201,6 +231,7 @@ onMounted(() => {
 });
 onBeforeUnmount(() => {
   if (rangeFrame !== null) cancelAnimationFrame(rangeFrame);
+  if (tailFrame !== null) cancelAnimationFrame(tailFrame);
   rowObserver?.disconnect();
   widthObserver?.disconnect();
   observedRows.clear();
@@ -209,7 +240,7 @@ defineExpose({ scrollToBottom, scrollToPosition });
 </script>
 
 <template>
-  <div ref="scroller" :data-total-items="items.length" @scroll.passive="handleScroll" @wheel.passive="handleWheel">
+  <div ref="scroller" :data-total-items="items.length" :data-range-start="startIndex" :data-range-end="endIndex" @scroll.passive="handleScroll" @wheel.passive="handleWheel">
     <div v-if="$slots.before" class="virtual-list-overlay"><slot name="before" /></div>
     <slot v-if="!items.length" name="empty" />
     <div class="virtual-list-spacer" :style="{ height: `${topSpacer}px` }" />

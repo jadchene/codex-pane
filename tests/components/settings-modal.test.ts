@@ -49,6 +49,8 @@ describe("SettingsModal", () => {
     const appearance = { theme: "dark" as const, fontFamily: "Microsoft YaHei UI", fontSize: 18, accentColor: "#10a37f", commandShellPath: "", unwrapPowerShellCommands: true, mcpGatewayAdaptation: false };
     expect(appearanceCssVars(appearance)).toMatchObject({ "--app-font-family": "Microsoft YaHei UI", "--app-font-size": "18px", "--app-control-border": "#4a4a4a", "--app-diff-add": "#213a2b", "--app-diff-delete": "#4a221d" });
     expect(appearanceThemeOverrides(appearance).common).toMatchObject({ fontFamily: "Microsoft YaHei UI", fontFamilyMono: "Microsoft YaHei UI", fontSize: "18px", fontSizeTiny: "16px", fontSizeSmall: "17px", fontSizeMedium: "18px" });
+    expect(appearanceCssVars({ ...appearance, fontFamily: "" })["--app-font-family"]).toContain("Segoe UI");
+    expect(appearanceThemeOverrides({ ...appearance, fontFamily: "" }).common?.fontFamily).toContain("Segoe UI");
   });
 
   it("labels the PowerShell wrapper path clearly, allows it to be cleared, and has an explicit close action", async () => {

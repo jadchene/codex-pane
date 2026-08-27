@@ -37,6 +37,7 @@ describe("workspace persistence validation", () => {
 
   it("validates persisted appearance settings", () => {
     expect(workspaceStateSchema.parse({ ...validState, appearance: { theme: "light", fontFamily: "Consolas", fontSize: 18, accentColor: "#336699" } }).appearance.theme).toBe("light");
+    expect(workspaceStateSchema.parse({ ...validState, appearance: { theme: "light", fontFamily: "", fontSize: 18, accentColor: "#336699" } }).appearance.fontFamily).toBe("");
     expect(() => workspaceStateSchema.parse({ ...validState, appearance: { theme: "dark", fontFamily: "Consolas", fontSize: 40, accentColor: "red" } })).toThrow();
   });
 

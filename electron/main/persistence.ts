@@ -44,7 +44,7 @@ export const workspaceStateSchema = z.object({
   defaultCwd: z.string().max(32_768).default(""),
   appearance: z.object({
     theme: z.enum(["dark", "light"]).default("dark"),
-    fontFamily: z.string().min(1).max(200).default('"Segoe UI", "Microsoft YaHei UI", sans-serif'),
+    fontFamily: z.string().max(200).default('"Segoe UI", "Microsoft YaHei UI", sans-serif'),
     fontSize: z.number().int().min(12).max(22).default(14),
     accentColor: z.string().regex(/^#[0-9a-f]{6}$/i).default("#10a37f"),
     commandShellPath: z.string().max(32_768).default("C:\\Program Files\\PowerShell\\7\\pwsh.exe"),

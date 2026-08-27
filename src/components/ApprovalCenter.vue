@@ -17,6 +17,7 @@ const formError = ref("");
 const elicitationValues = reactive<Record<string, unknown>>({});
 const permissionSelection = reactive({ network: true, fileSystem: true });
 const root = ref<HTMLElement | null>(null);
+const noSpellcheckInputProps = { spellcheck: false, autocorrect: "off", autocapitalize: "off" } as const;
 const visibleRequests = computed(() => props.paneId ? props.requests.filter((request) => request.paneId === props.paneId) : props.requests);
 const activeRequest = computed(() => visibleRequests.value[0] ?? null);
 const params = computed(() => activeRequest.value?.params ?? {});
@@ -250,9 +251,9 @@ const openElicitationUrl = async (): Promise<void> => {
                       </NButton>
                       <NButton v-if="question.isOther" :type="answers[String(question.id)] === '__other__' ? 'primary' : 'default'" @click="chooseAnswer(question, '__other__')">其他</NButton>
                   </NSpace>
-                  <NInput v-if="question.isOther && answers[String(question.id)] === '__other__'" v-model:value="otherAnswers[String(question.id)]" placeholder="请输入其他答案" />
+                  <NInput v-if="question.isOther && answers[String(question.id)] === '__other__'" v-model:value="otherAnswers[String(question.id)]" :input-props="noSpellcheckInputProps" placeholder="请输入其他答案" />
                 </template>
-                <NInput v-else v-model:value="answers[String(question.id)]" :type="question.isSecret ? 'password' : 'textarea'" :show-password-on="question.isSecret ? 'click' : undefined" />
+                <NInput v-else v-model:value="answers[String(question.id)]" :input-props="noSpellcheckInputProps" :type="question.isSecret ? 'password' : 'textarea'" :show-password-on="question.isSecret ? 'click' : undefined" />
               </NFormItem>
             </NForm>
             <NAlert v-if="formError" type="error">{{ formError }}</NAlert>
@@ -269,11 +270,11 @@ const openElicitationUrl = async (): Promise<void> => {
                 <NInputNumber v-else-if="field.schema.type === 'number' || field.schema.type === 'integer'" :value="fieldNumberValue(field.name)" :min="field.schema.minimum as number | undefined" :max="field.schema.maximum as number | undefined" @update:value="updateField(field.name, $event)" />
                 <NSpace v-else-if="fieldOptions(field.schema).length && field.schema.type !== 'array'" vertical><NButton v-for="option in fieldOptions(field.schema)" :key="option.value" :type="fieldSelectValue(field.name) === option.value ? 'primary' : 'default'" @click="chooseElicitationOption(field, option.value)">{{ option.label }}</NButton></NSpace>
                 <NSelect v-else-if="fieldOptions(field.schema).length" :value="fieldSelectValue(field.name)" multiple :options="fieldOptions(field.schema)" @update:value="updateField(field.name, $event)" />
-                <NInput v-else :value="fieldStringValue(field.name)" :type="field.schema.format === 'password' ? 'password' : 'text'" :maxlength="field.schema.maxLength as number | undefined" @update:value="updateField(field.name, $event)" />
+                <NInput v-else :value="fieldStringValue(field.name)" :input-props="noSpellcheckInputProps" :type="field.schema.format === 'password' ? 'password' : 'text'" :maxlength="field.schema.maxLength as number | undefined" @update:value="updateField(field.name, $event)" />
               </NFormItem>
             </NForm>
             <NFormItem v-else-if="params.mode !== 'url'" label="扩展表单内容（JSON）">
-              <NInput v-model:value="formJson" type="textarea" :autosize="{ minRows: 5, maxRows: 14 }" />
+              <NInput v-model:value="formJson" type="textarea" :input-props="noSpellcheckInputProps" :autosize="{ minRows: 5, maxRows: 14 }" />
             </NFormItem>
             <NAlert v-if="formError" type="error">{{ formError }}</NAlert>
             <NSpace v-if="!singleChoiceElicitation">

@@ -86,4 +86,38 @@ describe("VirtualList", () => {
     expect(scroller.scrollTop).toBe(640);
     expect(wrapper.text()).toContain("message 10");
   });
+
+  it("keeps at least one viewport mounted beyond the visible bottom edge", async () => {
+    const items = Array.from({ length: 100 }, (_, index) => ({ id: `item-${index}`, text: `message ${index}` }));
+    const wrapper = mount(VirtualList, {
+      props: { items, itemKey: (item: unknown) => (item as { id: string }).id, estimateSize: () => 64, minItemSize: 56, buffer: 160 },
+      slots: { default: ({ item }: { item: unknown }) => h("article", { class: "virtual-row" }, (item as { text: string }).text) }
+    });
+    const scroller = wrapper.element as HTMLElement;
+    Object.defineProperty(scroller, "clientHeight", { configurable: true, value: 320 });
+    scroller.scrollTop = 640;
+    scroller.dispatchEvent(new Event("scroll"));
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 20));
+
+    expect(Number(wrapper.attributes("data-range-end"))).toBeGreaterThanOrEqual(21);
+  });
+
+  it("does not reattach streaming tail-follow after an upward wheel gesture", async () => {
+    const items = Array.from({ length: 100 }, (_, index) => ({ id: `item-${index}`, text: `message ${index}` }));
+    const wrapper = mount(VirtualList, {
+      props: { items, itemKey: (item: unknown) => (item as { id: string }).id, estimateSize: () => 64, followTail: true },
+      slots: { default: ({ item }: { item: unknown }) => h("article", { class: "virtual-row" }, (item as { text: string }).text) }
+    });
+    const scroller = wrapper.element as HTMLElement;
+    Object.defineProperty(scroller, "clientHeight", { configurable: true, value: 320 });
+    Object.defineProperty(scroller, "scrollHeight", { configurable: true, value: 6_400 });
+    scroller.scrollTop = 6_080;
+    scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -60 }));
+    scroller.scrollTop = 6_020;
+    scroller.dispatchEvent(new Event("scroll"));
+    (wrapper.vm as unknown as { scrollToBottom: (force?: boolean) => void }).scrollToBottom(false);
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 20));
+
+    expect(scroller.scrollTop).toBe(6_020);
+  });
 });

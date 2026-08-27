@@ -12,8 +12,10 @@ describe("Electron user data location", () => {
     const legacy = join(root, "legacy");
     const install = join(root, "install");
     await mkdir(join(legacy, "workspaces"), { recursive: true });
+    await mkdir(join(legacy, "files"), { recursive: true });
     await mkdir(install, { recursive: true });
     await writeFile(join(legacy, "workspaces", "default.json"), "legacy-workspace", "utf8");
+    await writeFile(join(legacy, "files", "managed.txt"), "managed-file", "utf8");
     try {
       const location = prepareUserDataLocation({
         executablePath: join(install, "Codex Pane.exe"),
@@ -22,8 +24,9 @@ describe("Electron user data location", () => {
         packaged: true
       });
       expect(location.path).toBe(join(install, "data"));
-      expect(location.migratedDirectories).toEqual(["workspaces"]);
+      expect(location.migratedDirectories).toEqual(["workspaces", "files"]);
       expect(await readFile(join(location.path, "workspaces", "default.json"), "utf8")).toBe("legacy-workspace");
+      expect(await readFile(join(location.path, "files", "managed.txt"), "utf8")).toBe("managed-file");
       expect(await readFile(join(legacy, "workspaces", "default.json"), "utf8")).toBe("legacy-workspace");
     } finally {
       await rm(root, { recursive: true, force: true });

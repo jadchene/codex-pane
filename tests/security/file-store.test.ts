@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -20,9 +20,12 @@ describe("FileStore", () => {
     await store.initialize();
 
     const reference = await store.importPath(source);
+    const duplicate = await store.importPath(source);
     const managedPath = store.resolveAttachment(reference.id, reference.name);
 
     expect(reference).toMatchObject({ name: "notes.txt", managed: true });
+    expect(duplicate.id).toBe(reference.id);
+    expect(await readdir(managedDirectory)).toHaveLength(1);
     expect(managedPath).toContain(managedDirectory);
     expect(managedPath).toMatch(/\.txt$/);
     expect(await readFile(managedPath, "utf8")).toBe("managed attachment");

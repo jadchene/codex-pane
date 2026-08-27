@@ -359,10 +359,13 @@ test("completes a real Codex turn", async () => {
     await expect(window.getByText(/Working/)).toHaveCount(0, { timeout: 20_000 });
 
     const imagePath = resolve("node_modules/app-builder-lib/templates/icons/electron-linux/64x64.png");
-    await application.evaluate(({ clipboard, nativeImage }, path) => clipboard.writeImage(nativeImage.createFromPath(path)), imagePath);
+    await application.evaluate(async ({ ClipboardItem, clipboard, nativeImage }, path) => {
+      const png = Uint8Array.from(nativeImage.createFromPath(path).toPNG());
+      await clipboard.write([new ClipboardItem({ "image/png": new Blob([png], { type: "image/png" }) })]);
+    }, imagePath);
     await composer.focus();
     await window.keyboard.press("Control+V");
-    await expect(window.getByText("剪贴板图片.png", { exact: true })).toBeVisible();
+    await expect(window.getByRole("button", { name: "移除 剪贴板图片.png" })).toBeVisible();
     await composer.fill("只回复“图片附件联调成功”，不要调用任何工具。" );
     await composer.press("Enter");
     await expect(window.locator(".message-agent")).toHaveCount(initialAgentMessageCount + 2, { timeout: 90_000 });

@@ -3,6 +3,7 @@ import { mkdir, readFile, readdir, stat, unlink, writeFile } from "node:fs/promi
 import { basename, extname, join, resolve } from "node:path";
 import { clipboard, nativeImage } from "electron";
 import type { MediaAttachment } from "../shared/contracts.js";
+import { stableManagedId } from "./managed-id.js";
 
 const MAX_IMAGE_BYTES = 15 * 1024 * 1024;
 const MAX_IMAGE_DIMENSION = 8192;
@@ -45,13 +46,19 @@ export class MediaStore {
   }
 
   async pasteClipboard(): Promise<MediaAttachment> {
-    const image = clipboard.readImage();
+    const items = await clipboard.read();
+    const item = items.find((entry) => entry.types.some((type) => type.startsWith("image/")));
+    const type = item?.types.find((entry) => entry.startsWith("image/"));
+    if (!item || !type) throw new Error("剪贴板里没有可用的图片。" );
+    const value = await item.getType(type);
+    if (!(value instanceof Blob)) throw new Error("剪贴板里的图片格式无法读取。" );
+    const image = nativeImage.createFromBuffer(Buffer.from(await value.arrayBuffer()));
     if (image.isEmpty()) {
       throw new Error("剪贴板里没有可用的图片。" );
     }
     this.#validateDimensions(image.getSize());
     const png = image.toPNG();
-    return this.#writePng(png, "剪贴板图片.png");
+    return this.#writePng(png, "剪贴板图片.png", stableManagedId(png));
   }
 
   async importPath(sourcePath: string): Promise<MediaAttachment> {
@@ -61,12 +68,20 @@ export class MediaStore {
       throw new Error("请选择不超过 15 MB 的图片文件。" );
     }
     const bytes = await readFile(normalizedPath);
+    const id = stableManagedId(bytes);
+    const existingPath = this.resolveAttachment(id);
+    try {
+      const existing = await stat(existingPath);
+      if (existing.isFile()) return { id, name: basename(normalizedPath, extname(normalizedPath)) + ".png", url: `codex-media://media/${id}`, size: existing.size, kind: "local", sourcePath: existingPath };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
     const image = nativeImage.createFromBuffer(bytes);
     if (image.isEmpty()) {
       throw new Error("这个文件不是可识别的图片。" );
     }
     this.#validateDimensions(image.getSize());
-    return this.#writePng(image.toPNG(), basename(normalizedPath, extname(normalizedPath)) + ".png");
+    return this.#writePng(image.toPNG(), basename(normalizedPath, extname(normalizedPath)) + ".png", id);
   }
 
   resolveAttachment(id: string): string {
@@ -84,15 +99,21 @@ export class MediaStore {
     return readFile(this.resolveAttachment(id));
   }
 
-  async #writePng(bytes: Buffer, name: string): Promise<MediaAttachment> {
+  async #writePng(bytes: Buffer, name: string, requestedId?: string): Promise<MediaAttachment> {
     if (bytes.byteLength > MAX_IMAGE_BYTES) {
       throw new Error("图片转换后超过 15 MB，请压缩后重试。" );
     }
     await mkdir(this.#directory, { recursive: true });
-    const id = randomUUID();
+    const id = requestedId ?? randomUUID();
     const sourcePath = join(this.#directory, `${id}.png`);
-    await writeFile(sourcePath, bytes, { flag: "wx" });
-    return { id, name, url: `codex-media://media/${id}`, size: bytes.byteLength, kind: "local", sourcePath };
+    try {
+      await writeFile(sourcePath, bytes, { flag: "wx" });
+      return { id, name, url: `codex-media://media/${id}`, size: bytes.byteLength, kind: "local", sourcePath };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      const existing = await stat(sourcePath);
+      return { id, name, url: `codex-media://media/${id}`, size: existing.size, kind: "local", sourcePath };
+    }
   }
 
   #validateDimensions(size: Electron.Size): void {

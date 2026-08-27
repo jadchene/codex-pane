@@ -24,11 +24,13 @@ export class AppServerSupervisor extends EventEmitter {
   #activeTurns = new Map<string, string>();
   #stopping = false;
   #restartUsed = false;
+  #restartTimer: NodeJS.Timeout | null = null;
   #stabilityTimer: NodeJS.Timeout | null = null;
   #validator: RuntimeProtocolValidator | null = null;
   #deltaNotifications = new Map<string, JsonRpcNotification>();
   #deltaTimer: NodeJS.Timeout | null = null;
   #workingDirectory: string;
+  readonly #clientVersion: string;
   #state: ConnectionState = {
     phase: "stopped",
     generation: 0,
@@ -37,9 +39,10 @@ export class AppServerSupervisor extends EventEmitter {
     message: "Codex 服务尚未启动"
   };
 
-  constructor(workingDirectory: string) {
+  constructor(workingDirectory: string, clientVersion: string) {
     super();
     this.#workingDirectory = workingDirectory;
+    this.#clientVersion = clientVersion;
   }
 
   setWorkingDirectory(workingDirectory: string): void {
@@ -80,6 +83,10 @@ export class AppServerSupervisor extends EventEmitter {
       return;
     }
     this.#stopping = false;
+    if (this.#restartTimer) {
+      clearTimeout(this.#restartTimer);
+      this.#restartTimer = null;
+    }
     if (this.#stabilityTimer) clearTimeout(this.#stabilityTimer);
     this.#generation += 1;
     this.#setState("starting", "正在连接本机 Codex…");
@@ -147,7 +154,7 @@ export class AppServerSupervisor extends EventEmitter {
 
     try {
       await this.call("initialize", {
-        clientInfo: { name: "codex_pane", title: "Codex Pane", version: "0.1.0" },
+        clientInfo: { name: "codex_pane", title: "Codex Pane", version: this.#clientVersion },
         capabilities: {
           experimentalApi: true,
           requestAttestation: false,
@@ -170,6 +177,10 @@ export class AppServerSupervisor extends EventEmitter {
   async stop(): Promise<void> {
     this.#stopping = true;
     this.#restartUsed = false;
+    if (this.#restartTimer) {
+      clearTimeout(this.#restartTimer);
+      this.#restartTimer = null;
+    }
     if (this.#stabilityTimer) {
       clearTimeout(this.#stabilityTimer);
       this.#stabilityTimer = null;
@@ -416,16 +427,37 @@ export class AppServerSupervisor extends EventEmitter {
       });
       let stdout = "";
       let stderr = "";
-      child.stdout!.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
-      child.stderr!.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
-      child.once("error", () => reject(new Error("找不到 codex 命令。请安装 Codex CLI，并确认终端中可以运行 codex --version。")));
+      let settled = false;
+      const finish = (operation: () => void): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        operation();
+      };
+      const failOversizedOutput = (): void => {
+        finish(() => reject(new Error("codex --version 返回内容异常，已停止读取。")));
+        void forceTerminateProcessTree(child.pid);
+      };
+      const timer = setTimeout(() => {
+        finish(() => reject(new Error("读取 Codex 版本超时。请在终端确认 codex --version 可以正常结束。")));
+        void forceTerminateProcessTree(child.pid);
+      }, 10_000);
+      child.stdout!.on("data", (chunk: Buffer) => {
+        stdout += chunk.toString();
+        if (stdout.length + stderr.length > 64 * 1024) failOversizedOutput();
+      });
+      child.stderr!.on("data", (chunk: Buffer) => {
+        stderr += chunk.toString();
+        if (stdout.length + stderr.length > 64 * 1024) failOversizedOutput();
+      });
+      child.once("error", () => finish(() => reject(new Error("找不到 codex 命令。请安装 Codex CLI，并确认终端中可以运行 codex --version。"))));
       child.once("exit", (code) => {
         if (code !== 0) {
-          reject(new Error(`无法读取 Codex 版本。${this.#redact(stderr).trim()}`));
+          finish(() => reject(new Error(`无法读取 Codex 版本。${this.#redact(stderr).trim()}`)));
           return;
         }
         const match = stdout.match(/codex-cli\s+([^\s]+)/i);
-        resolve(match?.[1] ?? (stdout.trim() || "未知"));
+        finish(() => resolve(match?.[1] ?? (stdout.trim() || "未知")));
       });
     });
   }
@@ -453,7 +485,8 @@ export class AppServerSupervisor extends EventEmitter {
     if (!this.#restartUsed) {
       this.#restartUsed = true;
       this.#setState("restarting", `Codex 服务意外中断（${detail}），正在尝试恢复…`);
-      setTimeout(() => {
+      this.#restartTimer = setTimeout(() => {
+        this.#restartTimer = null;
         void this.start().catch((error) => this.#setState("error", `Codex 自动恢复失败：${String(error)}`));
       }, 500);
       return;

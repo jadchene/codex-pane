@@ -1,5 +1,8 @@
 import { spawn } from "node:child_process";
+import { readFile } from "node:fs/promises";
 import { createInterface } from "node:readline";
+
+const packageVersion = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8")).version;
 
 const child = spawn(process.platform === "win32" ? process.env.ComSpec ?? "C:\\Windows\\System32\\cmd.exe" : "codex", process.platform === "win32" ? ["/d", "/s", "/c", "codex", "app-server"] : ["app-server"], {
   shell: false,
@@ -43,7 +46,7 @@ lines.on("line", (line) => {
 
 const main = async () => {
   const initialized = await call("initialize", {
-    clientInfo: { name: "codex_pane_probe", title: "Codex Pane Probe", version: "0.1.0" },
+    clientInfo: { name: "codex_pane_probe", title: "Codex Pane Probe", version: packageVersion },
     capabilities: { experimentalApi: true, requestAttestation: false, optOutNotificationMethods: null, extensions: { "openai/form": {} } }
   });
   write({ method: "initialized" });

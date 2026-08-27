@@ -117,10 +117,14 @@ test("keeps the longest-session shape smooth across six panes", async () => {
         if (element.scrollTop > previous + 1) reversals += 1;
         previous = element.scrollTop;
       }
-      return { start, end: element.scrollTop, reversals };
+      const renderedRows = [...element.querySelectorAll<HTMLElement>("[data-virtual-key]")];
+      const renderedBottom = renderedRows.at(-1)?.getBoundingClientRect().bottom ?? 0;
+      const viewportBottom = element.getBoundingClientRect().bottom;
+      return { start, end: element.scrollTop, reversals, retainedBelowViewport: renderedBottom - viewportBottom };
     });
     expect(upwardScroll.reversals).toBe(0);
     expect(upwardScroll.end).toBeLessThan(upwardScroll.start - 1_000);
+    expect(upwardScroll.retainedBelowViewport).toBeGreaterThan(100);
 
     const idleFrames = await frameMetrics(window, false);
     process.stdout.write(`[performance:idle] ${JSON.stringify(idleFrames)}\n`);
@@ -145,6 +149,19 @@ test("keeps the longest-session shape smooth across six panes", async () => {
     expect(streamingFrames.p95).toBeLessThanOrEqual(20);
     expect(streamingFrames.droppedFrames).toBe(0);
     expect(streamingFrames.longFrames).toBe(0);
+    const detachedStreamingPosition = await window.locator(".pane-output").first().evaluate((element) => {
+      element.dispatchEvent(new WheelEvent("wheel", { deltaY: -160 }));
+      element.scrollTop = Math.max(0, element.scrollTop - 160);
+      return element.scrollTop;
+    });
+    await window.waitForTimeout(500);
+    const detachedStreamingEnd = await window.locator(".pane-output").first().evaluate((element) => element.scrollTop);
+    expect(detachedStreamingEnd).toBeLessThanOrEqual(detachedStreamingPosition + 1);
+
+    await window.locator(".pane textarea").evaluateAll((composers) => {
+      for (const composer of composers) composer.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true }));
+    });
+    await expect.poll(async () => window.locator(".pane-output").evaluateAll((elements) => elements.every((element) => element.scrollHeight - element.clientHeight - element.scrollTop <= 1.1)), { timeout: 10_000 }).toBe(true);
   } finally {
     await application.close();
     await rm(userDataPath, { recursive: true, force: true });

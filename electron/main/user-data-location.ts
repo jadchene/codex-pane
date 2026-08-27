@@ -2,7 +2,7 @@ import { closeSync, cpSync, existsSync, mkdirSync, openSync, renameSync, rmSync,
 import { randomUUID } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
 
-const APPLICATION_DATA_DIRECTORIES = ["workspaces", "media", "logs"] as const;
+const APPLICATION_DATA_DIRECTORIES = ["workspaces", "media", "files", "logs"] as const;
 
 export type UserDataLocationOptions = {
   explicitPath?: string;

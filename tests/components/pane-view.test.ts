@@ -151,6 +151,22 @@ describe("PaneView compact workbench interactions", () => {
     expect(wrapper.get(".effort-select-fit .select-width-sizer").text()).toContain("medium");
   });
 
+  it("keeps composer input literal and disables empty sends and steering", async () => {
+    const { value, wrapper } = mountPane();
+    const textarea = wrapper.get("textarea");
+    expect(textarea.attributes("spellcheck")).toBe("false");
+    expect(wrapper.findAll("button").find((button) => button.text() === "发送")!.attributes("disabled")).toBeDefined();
+
+    value.draft = "继续排查";
+    await nextTick();
+    expect(wrapper.findAll("button").find((button) => button.text() === "发送")!.attributes("disabled")).toBeUndefined();
+
+    value.activeTurnId = "turn-1";
+    value.draft = "";
+    await nextTick();
+    expect(wrapper.findAll("button").find((button) => button.text() === "追加")!.attributes("disabled")).toBeDefined();
+  });
+
   it("does not let model or effort selectors return focus to the composer", async () => {
     const { wrapper } = mountPane();
     const textarea = wrapper.get("textarea").element;

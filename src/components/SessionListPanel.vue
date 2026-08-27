@@ -35,6 +35,7 @@ const emit = defineEmits<{
 }>();
 const search = ref("");
 const searchInput = ref<{ focus: () => void } | null>(null);
+const noSpellcheckInputProps = { spellcheck: false, autocorrect: "off", autocapitalize: "off" } as const;
 let timer: ReturnType<typeof setTimeout> | null = null;
 
 const focusSearch = async (): Promise<void> => {
@@ -58,7 +59,7 @@ defineExpose({ focusSearch });
     </NButton>
     <div class="session-search-sticky">
       <div class="session-search-row">
-        <NInput ref="searchInput" v-model:value="search" clearable :placeholder="searchPlaceholder" aria-label="搜索历史会话" />
+        <NInput ref="searchInput" v-model:value="search" clearable :input-props="noSpellcheckInputProps" :placeholder="searchPlaceholder" aria-label="搜索历史会话" />
         <NButton secondary class="session-scope-button" :disabled="showAll && !currentCwd" @click="emit('scope', !showAll, search)">{{ showAll ? currentOnlyLabel : showAllLabel }}</NButton>
       </div>
       <NText depth="3" class="session-scope-label">{{ showAll ? "所有工作目录" : `当前目录：${currentCwd || "未设置"}` }}</NText>

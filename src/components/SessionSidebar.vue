@@ -13,6 +13,7 @@ const showAll = ref(false);
 const search = ref("");
 const loading = ref(false);
 const switchError = ref<string | null>(null);
+let loadSequence = 0;
 const currentCwd = computed(() => props.pane.cwd || store.state.defaultCwd || "");
 const unreadThreadIds = computed(() => [...new Set([
   ...store.state.sidebarUnreadThreadIds,
@@ -24,13 +25,14 @@ const workingThreadIds = computed(() => store.state.panes
 
 const load = async (): Promise<void> => {
   if (store.state.connection.phase !== "ready") return;
+  const sequence = ++loadSequence;
   loading.value = true;
   try {
     await store.loadThreads(search.value, showAll.value ? null : currentCwd.value);
   } catch (error) {
-    props.pane.error = `无法读取会话：${error instanceof Error ? error.message : String(error)}`;
+    if (sequence === loadSequence) props.pane.error = `无法读取会话：${error instanceof Error ? error.message : String(error)}`;
   } finally {
-    loading.value = false;
+    if (sequence === loadSequence) loading.value = false;
   }
 };
 const searchSessions = (value: string): void => {

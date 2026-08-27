@@ -1,7 +1,8 @@
-import { randomUUID } from "node:crypto";
+import { constants } from "node:fs";
 import { copyFile, mkdir, stat } from "node:fs/promises";
 import { basename, extname, join, resolve } from "node:path";
 import type { FileReference } from "../shared/contracts.js";
+import { stableManagedId } from "./managed-id.js";
 
 const MAX_FILE_BYTES = 100 * 1024 * 1024;
 
@@ -22,10 +23,14 @@ export class FileStore {
     if (!sourceStat.isFile() || sourceStat.size > MAX_FILE_BYTES) {
       throw new Error("请选择不超过 100 MB 的文件。" );
     }
-    const id = randomUUID();
+    const id = stableManagedId(`${process.platform === "win32" ? normalizedPath.toLocaleLowerCase() : normalizedPath}\0${sourceStat.size}\0${sourceStat.mtimeMs}\0${sourceStat.ctimeMs}`);
     const name = basename(normalizedPath);
     const destination = this.resolveAttachment(id, name);
-    await copyFile(normalizedPath, destination);
+    try {
+      await copyFile(normalizedPath, destination, constants.COPYFILE_EXCL);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    }
     return { id, name, path: destination, managed: true };
   }
 

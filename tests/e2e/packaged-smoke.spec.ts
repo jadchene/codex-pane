@@ -195,10 +195,13 @@ test("verifies the packaged Windows executable, protected persistence, reconnect
       expect((await shortReply.boundingBox())?.height ?? 1000).toBeLessThan(64);
       expect(await shortReply.locator(".copy-message-button").evaluate((element) => getComputedStyle(element).position)).toBe("absolute");
       const imagePath = resolve("node_modules/app-builder-lib/templates/icons/electron-linux/64x64.png");
-      await application.evaluate(({ clipboard, nativeImage }, path) => clipboard.writeImage(nativeImage.createFromPath(path)), imagePath);
+      await application.evaluate(async ({ ClipboardItem, clipboard, nativeImage }, path) => {
+        const png = Uint8Array.from(nativeImage.createFromPath(path).toPNG());
+        await clipboard.write([new ClipboardItem({ "image/png": new Blob([png], { type: "image/png" }) })]);
+      }, imagePath);
       await composer.focus();
       await window.keyboard.press("Control+V");
-      await expect(window.getByText("剪贴板图片.png", { exact: true })).toBeVisible();
+      await expect(window.getByRole("button", { name: "移除 剪贴板图片.png" })).toBeVisible();
       await composer.fill("只回复“图片附件联调成功”，不要调用任何工具。");
       await composer.press("Enter");
       await expect(window.locator(".message-agent").last()).toContainText("图片附件联调成功", { timeout: 90_000 });
@@ -223,6 +226,7 @@ test("verifies the packaged Windows executable, protected persistence, reconnect
         const pane = window.locator(`[data-pane-id="pane-${index + 1}"]`);
         const paneComposer = pane.getByPlaceholder(/发送消息/);
         await paneComposer.fill("/new");
+        await paneComposer.press("Enter");
         await paneComposer.press("Enter");
         await paneComposer.fill(`只回复“PANE-${index + 1}-OK”，不要调用任何工具。`);
       }

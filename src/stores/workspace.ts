@@ -1721,10 +1721,9 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     if (cwd) {
       if (pane.threadId) {
         await window.codexPane.request({ method: "thread/settings/update", params: { threadId: pane.threadId, cwd } });
-      } else {
-        pane.cwd = cwd;
-        scheduleSave();
       }
+      pane.cwd = cwd;
+      scheduleSave();
     }
   };
 
@@ -1751,8 +1750,19 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   };
 
   const addAttachmentBatch = (pane: PaneState, batch: { images: PaneState["attachments"]; files: PaneState["references"] }): void => {
-    pane.attachments.push(...batch.images);
-    pane.references.push(...batch.files);
+    const imageIds = new Set(pane.attachments.map((attachment) => attachment.id));
+    const referencePaths = new Set(pane.references.map((reference) => reference.path.toLocaleLowerCase()));
+    pane.attachments.push(...batch.images.filter((attachment) => {
+      if (imageIds.has(attachment.id)) return false;
+      imageIds.add(attachment.id);
+      return true;
+    }));
+    pane.references.push(...batch.files.filter((reference) => {
+      const path = reference.path.toLocaleLowerCase();
+      if (referencePaths.has(path)) return false;
+      referencePaths.add(path);
+      return true;
+    }));
     pane.error = null;
     scheduleSave();
   };

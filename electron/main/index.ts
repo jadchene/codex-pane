@@ -2,7 +2,7 @@ import { basename, dirname, extname, join, resolve } from "node:path";
 import { existsSync, mkdirSync, readFileSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { app, BrowserWindow, clipboard, dialog, ipcMain, protocol, safeStorage, shell } from "electron";
+import { app, BrowserWindow, clipboard, dialog, ipcMain, protocol, safeStorage, screen, shell } from "electron";
 import { AppServerSupervisor } from "./app-server-supervisor.js";
 import { FileStore } from "./file-store.js";
 import { MediaStore } from "./media-store.js";
@@ -12,6 +12,9 @@ import { RuntimeProtocolValidator } from "../../packages/protocol/src/runtime-va
 import { DiagnosticLog } from "./diagnostic-log.js";
 import { useCodexArgsPrefixForTests, useCodexFixtureForTests } from "./codex-process.js";
 import { prepareUserDataLocation } from "./user-data-location.js";
+import { isTrustedRendererUrl, rendererEntryUrl } from "./renderer-trust.js";
+import { fitWindowBounds } from "./window-bounds.js";
+import { mediaRequestId } from "./media-protocol.js";
 
 protocol.registerSchemesAsPrivileged([
   { scheme: "codex-media", privileges: { secure: true, standard: true, supportFetchAPI: true } }
@@ -87,7 +90,9 @@ app.setPath("sessionData", join(chromiumRoot, ownsPrimarySession ? "primary" : S
 
 let mainWindow: BrowserWindow | null = null;
 const fallbackAppServerWorkingDirectory = app.isPackaged ? dirname(app.getPath("exe")) : app.getAppPath();
-const supervisor = new AppServerSupervisor(fallbackAppServerWorkingDirectory);
+const loadBundledRenderer = app.isPackaged || process.env.CODEX_PANE_LOAD_DIST === "1";
+const trustedRendererUrl = rendererEntryUrl(app.getAppPath(), loadBundledRenderer);
+const supervisor = new AppServerSupervisor(fallbackAppServerWorkingDirectory, app.getVersion());
 let mediaStore: MediaStore;
 let fileStore: FileStore;
 let stateStore: StateStore;
@@ -180,13 +185,18 @@ const importAttachmentPaths = async (paths: string[]): Promise<AttachmentBatch> 
   return { images, files };
 };
 
-const clipboardFilePaths = (): string[] => {
-  const paths = clipboard.availableFormats().flatMap((format) => {
-    if (!/^filenamew?$/i.test(format)) return [];
-    const buffer = clipboard.readBuffer(format);
-    const value = buffer.toString(/w$/i.test(format) ? "utf16le" : "utf8");
-    return value.split("\0").map((path) => path.trim()).filter(Boolean);
-  });
+const clipboardFilePaths = async (): Promise<string[]> => {
+  const paths: string[] = [];
+  for (const item of await clipboard.read()) {
+    for (const type of item.types) {
+      const match = type.match(/(?:^|format=")filename(w?)(?:"|$)/i);
+      if (!match) continue;
+      const value = await item.getType(type);
+      if (!(value instanceof Blob)) continue;
+      const buffer = Buffer.from(await value.arrayBuffer());
+      paths.push(...buffer.toString(match[1] ? "utf16le" : "utf8").split("\0").map((path) => path.trim()).filter(Boolean));
+    }
+  }
   return [...new Set(paths)].filter((path) => existsSync(path) && statSync(path).isFile());
 };
 
@@ -234,11 +244,16 @@ const unprotectRemoteUrls = (workspace: WorkspaceState | null): WorkspaceState |
 
 const createWindow = async (): Promise<void> => {
   const workspace = await stateStore.load();
-  mainWindow = new BrowserWindow({
+  const displays = screen.getAllDisplays();
+  const primaryDisplay = screen.getPrimaryDisplay();
+  const restoredBounds = fitWindowBounds({
     width: workspace?.window.width ?? 1480,
     height: workspace?.window.height ?? 920,
     x: workspace?.window.x,
-    y: workspace?.window.y,
+    y: workspace?.window.y
+  }, displays.map((display) => display.workArea), Math.max(0, displays.findIndex((display) => display.id === primaryDisplay.id)));
+  mainWindow = new BrowserWindow({
+    ...restoredBounds,
     minWidth: 960,
     minHeight: 680,
     show: false,
@@ -257,12 +272,18 @@ const createWindow = async (): Promise<void> => {
   if (workspace?.window.maximized) {
     mainWindow.maximize();
   }
-  const isTrustedLocalPage = (url: string): boolean => app.isPackaged ? url.startsWith("file://") : url.startsWith("http://127.0.0.1:5173");
+  const isTrustedLocalPage = (url: string): boolean => isTrustedRendererUrl(url, trustedRendererUrl);
   mainWindow.webContents.session.setPermissionCheckHandler((webContents, permission, requestingOrigin) => {
-    return webContents === mainWindow?.webContents && String(permission) === "local-fonts" && isTrustedLocalPage(requestingOrigin);
+    return webContents === mainWindow?.webContents
+      && String(permission) === "local-fonts"
+      && isTrustedLocalPage(webContents.getURL())
+      && (isTrustedLocalPage(requestingOrigin) || loadBundledRenderer && requestingOrigin === "file://");
   });
   mainWindow.webContents.session.setPermissionRequestHandler((webContents, permission, callback, details) => {
-    callback(webContents === mainWindow?.webContents && String(permission) === "local-fonts" && isTrustedLocalPage(details.requestingUrl));
+    callback(webContents === mainWindow?.webContents
+      && String(permission) === "local-fonts"
+      && isTrustedLocalPage(webContents.getURL())
+      && isTrustedLocalPage(details.requestingUrl));
   });
   mainWindow.once("ready-to-show", () => mainWindow?.show());
   mainWindow.webContents.on("render-process-gone", (_event, details) => {
@@ -302,12 +323,9 @@ const createWindow = async (): Promise<void> => {
     return { action: "deny" };
   });
   mainWindow.webContents.on("will-navigate", (event, url) => {
-    const allowedDevelopmentUrl = !app.isPackaged && url.startsWith("http://127.0.0.1:5173");
-    if (!allowedDevelopmentUrl && !url.startsWith("file://")) {
-      event.preventDefault();
-    }
+    if (!isTrustedLocalPage(url)) event.preventDefault();
   });
-  if (app.isPackaged || process.env.CODEX_PANE_LOAD_DIST === "1") {
+  if (loadBundledRenderer) {
     await mainWindow.loadFile(join(app.getAppPath(), "dist/index.html"));
   } else {
     await mainWindow.loadURL("http://127.0.0.1:5173");
@@ -316,7 +334,10 @@ const createWindow = async (): Promise<void> => {
 
 const registerIpc = (): void => {
   const assertTrustedSender = (event: Electron.IpcMainInvokeEvent): void => {
-    if (!mainWindow || event.sender !== mainWindow.webContents || event.senderFrame !== mainWindow.webContents.mainFrame) {
+    if (!mainWindow
+      || event.sender !== mainWindow.webContents
+      || event.senderFrame !== mainWindow.webContents.mainFrame
+      || !isTrustedRendererUrl(event.senderFrame.url, trustedRendererUrl)) {
       throw new Error("已拒绝来自未知页面的应用调用。" );
     }
   };
@@ -375,7 +396,7 @@ const registerIpc = (): void => {
     if (!Array.isArray(rawPaths) || rawPaths.length > 20 || rawPaths.some((path) => typeof path !== "string" || path.length > 32_768)) throw new Error("剪贴板文件路径无效。");
     if (!Number.isInteger(rawLimit) || Number(rawLimit) < 1 || Number(rawLimit) > 20) throw new Error("可添加附件数量无效。");
     const suggestedPaths = rawPaths.map((path) => resolve(path)).filter((path) => existsSync(path) && statSync(path).isFile());
-    const paths = (suggestedPaths.length ? suggestedPaths : clipboardFilePaths()).slice(0, Number(rawLimit));
+    const paths = (suggestedPaths.length ? suggestedPaths : await clipboardFilePaths()).slice(0, Number(rawLimit));
     if (paths.length) return importAttachmentPaths(paths);
     return { images: [await mediaStore.pasteClipboard()], files: [] };
   });
@@ -440,14 +461,14 @@ const registerIpc = (): void => {
     assertTrustedSender(event);
     return mainWindow?.isMaximized() ?? false;
   });
-  ipcMain.handle("clipboard:write-text", (event, rawValue: unknown) => {
+  ipcMain.handle("clipboard:write-text", async (event, rawValue: unknown) => {
     assertTrustedSender(event);
     if (typeof rawValue !== "string" || rawValue.length > 2_000_000) throw new Error("复制内容无效。");
-    clipboard.writeText(rawValue);
+    await clipboard.writeText(rawValue);
   });
   ipcMain.handle("external:open", async (event, rawUrl: unknown, rawDirect: unknown) => {
     assertTrustedSender(event);
-    if (typeof rawUrl !== "string") {
+    if (typeof rawUrl !== "string" || rawUrl.length > 8_192) {
       throw new Error("链接无效。" );
     }
     const url = new URL(rawUrl);
@@ -540,11 +561,11 @@ app.whenReady().then(async () => {
   diagnosticLog = new DiagnosticLog(join(dataDirectory, "logs"));
   await diagnosticLog.initialize();
   protocol.handle("codex-media", async (request) => {
-    const url = new URL(request.url);
-    const id = url.pathname.replace(/^\//, "");
+    const id = mediaRequestId(request.url, request.method);
+    if (!id) return new Response("Not found", { status: 404, headers: { "Content-Type": "text/plain", "X-Content-Type-Options": "nosniff" } });
     const bytes = await mediaStore.read(id);
     const body = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
-    return new Response(body, { headers: { "Content-Type": "image/png", "Cache-Control": "private, max-age=3600" } });
+    return new Response(body, { headers: { "Content-Type": "image/png", "Cache-Control": "private, max-age=3600", "X-Content-Type-Options": "nosniff" } });
   });
   registerIpc();
   await createWindow();

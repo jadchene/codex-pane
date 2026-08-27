@@ -27,6 +27,7 @@ const systemFonts = ref<string[]>([]);
 const fontListState = ref<"idle" | "loading" | "ready" | "unavailable" | "denied">("idle");
 const fontOptions = computed(() => systemFonts.value.map((family) => ({ label: family, value: family })));
 const display = (value: string | null | undefined): string => value || "—";
+const noSpellcheckInputProps = { spellcheck: false, autocorrect: "off", autocapitalize: "off" } as const;
 const loadSystemFonts = async (): Promise<void> => {
   if (fontListState.value === "loading" || fontListState.value === "ready") return;
   const queryLocalFonts = (window as typeof window & { queryLocalFonts?: () => Promise<Array<{ family: string }>> }).queryLocalFonts;
@@ -82,7 +83,7 @@ watch(() => props.show, (show) => { if (show) void loadSystemFonts(); }, { immed
           </NFormItem>
           <NFormItem label="界面字体">
             <div class="font-field">
-              <NAutoComplete v-model:value="fontFamily" :options="fontOptions" clearable placeholder="输入或选择系统字体" />
+              <NAutoComplete v-model:value="fontFamily" :options="fontOptions" :input-props="noSpellcheckInputProps" clearable placeholder="输入或选择系统字体，留空使用默认字体" />
               <NText v-if="fontListState === 'loading'" depth="3">正在读取系统字体…</NText>
               <NText v-else-if="fontListState === 'ready'" depth="3">已读取 {{ systemFonts.length }} 个字体系列，也可以直接输入。</NText>
               <NText v-else-if="fontListState === 'unavailable'" depth="3">当前环境不支持读取系统字体，请直接输入已安装字体名称。</NText>
@@ -109,7 +110,7 @@ watch(() => props.show, (show) => { if (show) void loadSystemFonts(); }, { immed
             </NCard>
           </NFormItem>
           <NFormItem label="pwsh 路径">
-            <NInput v-model:value="commandShellPath" clearable placeholder="C:\Program Files\PowerShell\7\pwsh.exe" />
+            <NInput v-model:value="commandShellPath" :input-props="noSpellcheckInputProps" clearable placeholder="C:\Program Files\PowerShell\7\pwsh.exe" />
           </NFormItem>
           <NFormItem label="简化 pwsh 命令">
             <NSwitch v-model:value="unwrapPowerShellCommands" />

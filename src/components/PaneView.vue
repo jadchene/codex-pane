@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, h, nextTick, onMounted, ref, watch } from "vue";
+import { computed, h, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { NAlert, NButton, NDropdown, NIcon, NInput, NSelect, NTag, NText, NTooltip } from "naive-ui";
 import { AddOutline, AttachOutline, DocumentTextOutline, LinkOutline, PauseOutline, SendOutline } from "@vicons/ionicons5";
 import type { ItemAction, PaneState, PendingServerRequest, UiItem } from "../types";
@@ -42,7 +42,7 @@ const emit = defineEmits<{
   itemAction: [action: ItemAction];
 }>();
 
-type ConversationScroller = { $el: HTMLElement; scrollToBottom: () => void; scrollToPosition: (position: number) => void };
+type ConversationScroller = { $el: HTMLElement; scrollToBottom: (force?: boolean) => void; scrollToPosition: (position: number) => void };
 type ComposerInput = { focus: () => void; $el?: HTMLElement };
 type ComposerToken = { start: number; end: number; query: string };
 
@@ -123,6 +123,11 @@ const goalStatusLabel = computed(() => {
 });
 const activeSubAgentCount = computed(() => Object.values(props.pane.subAgents ?? {}).filter((agent) => ["pendingInit", "running", "unknown"].includes(agent.status)).length);
 const backgroundTaskCount = computed(() => props.pane.backgroundTerminals?.length ?? 0);
+const composerUnavailable = computed(() => (!props.pane.draft.trim() && props.pane.attachments.length === 0 && props.pane.references.length === 0)
+  || !modelSupportsImage.value && props.pane.attachments.length > 0
+  || props.pane.status === "starting"
+  || props.pane.status === "interrupting");
+const noSpellcheckInputProps = { spellcheck: false, autocorrect: "off", autocapitalize: "off" } as const;
 const modelSelectLabels = computed(() => ["模型", ...props.models.map((model) => model.label)]);
 const effortSelectLabels = computed(() => ["推理", ...effortOptions.value.map((option) => option.label)]);
 const composerDropdownOptions = computed(() => {
@@ -179,22 +184,18 @@ const syncComposerCaret = (event: Event): void => {
 const scrollToBottom = async (): Promise<void> => {
   if (!props.pane.followTail) return;
   await nextTick();
-  const element = outputElement();
-  if (!element) return;
-  element.scrollTop = element.scrollHeight;
-  emit("scrollState", element.scrollTop, true);
+  output.value?.scrollToBottom(false);
 };
 const forceScrollToBottom = async (): Promise<void> => {
   await nextTick();
+  output.value?.scrollToBottom(true);
   const element = outputElement();
-  if (!element) return;
-  element.scrollTop = element.scrollHeight;
-  emit("scrollState", element.scrollTop, true);
+  if (element) emit("scrollState", element.scrollTop, true);
 };
 const handleOutputScroll = (event: Event): void => {
   const element = event.currentTarget instanceof HTMLElement ? event.currentTarget : outputElement();
   if (!element) return;
-  const followTail = element.scrollHeight - element.scrollTop - element.clientHeight < 80;
+  const followTail = element.scrollHeight - element.scrollTop - element.clientHeight <= 2;
   emit("scrollState", element.scrollTop, followTail);
   if (element.scrollTop < 240) emit("loadOlder");
 };
@@ -243,6 +244,7 @@ const submitComposer = (): void => {
   const match = props.pane.draft.trim().match(/^\/(new|resume|cd|cwd|status|compact|review|mcp|skills|agents|permission|permissions|ps|processes|stop|kill-processes|fast|goal|plan|rename)(?:\s+([\s\S]*))?$/i);
   const command = match?.[1]?.toLowerCase();
   if (!command) {
+    void forceScrollToBottom();
     emit("send");
     return;
   }
@@ -260,7 +262,10 @@ const handleKeydown = (event: KeyboardEvent): void => {
   if (composerMenuVisible.value && event.key === "Enter" && !event.shiftKey && !event.isComposing) {
     event.preventDefault();
     const option = activeComposerOptions.value[slashIndex.value] ?? activeComposerOptions.value[0];
-    if (composerMenuMode.value === "slash" && option && "key" in option) selectSlashCommand(option.key);
+    if (composerMenuMode.value === "slash" && option && "key" in option) {
+      if (props.pane.draft.endsWith(" ") && props.pane.draft.trim().toLowerCase() === option.label.toLowerCase()) submitComposer();
+      else selectSlashCommand(option.key);
+    }
     else if (composerMenuMode.value === "skill" && option && "name" in option) selectSkill(option.name);
     else if (composerMenuMode.value === "file" && option && "path" in option) selectFile(option.path);
     return;
@@ -376,7 +381,7 @@ watch(
     await nextTick();
     const element = outputElement();
     if (!element) return;
-    element.scrollTop = Math.min(props.pane.scrollTop, Math.max(0, element.scrollHeight - element.clientHeight));
+    output.value?.scrollToPosition(Math.min(props.pane.scrollTop, Math.max(0, element.scrollHeight - element.clientHeight)));
     restoredThreadId.value = threadId;
   },
   { immediate: true }
@@ -388,10 +393,11 @@ watch(() => props.pane.model, (model) => {
 });
 onMounted(async () => {
   await nextTick();
-  if (props.pane.followTail) {
-    const element = outputElement();
-    if (element) element.scrollTop = element.scrollHeight;
-  }
+  if (props.pane.followTail) output.value?.scrollToBottom(true);
+});
+onUnmounted(() => {
+  if (fileSearchTimer) clearTimeout(fileSearchTimer);
+  fileSearchSequence += 1;
 });
 defineExpose({ focusComposer });
 </script>
@@ -408,7 +414,7 @@ defineExpose({ focusComposer });
       </NTag>
     </header>
 
-    <VirtualList ref="output" class="pane-output" :items="pane.items" :item-key="itemKey" :estimate-size="estimateItemSize" :min-item-size="56" :buffer="160" :follow-tail="pane.followTail" @scroll="handleOutputScroll">
+    <VirtualList ref="output" class="pane-output" :items="pane.items" :item-key="itemKey" :estimate-size="estimateItemSize" :min-item-size="56" :buffer="240" :follow-tail="pane.followTail" @scroll="handleOutputScroll">
       <template #before><div v-if="pane.historyLoading" class="history-loading">正在加载更早内容…</div></template>
       <template #default="{ item }"><div class="conversation-item"><ItemCard :item="item" :unwrap-power-shell="unwrapPowerShellCommands" :command-shell-path="commandShellPath" :mcp-gateway-adaptation="mcpGatewayAdaptation" @action="emit('itemAction', $event)" /></div></template>
       <template #empty><div class="empty-conversation"><NText depth="3">输入消息开始会话</NText></div></template>
@@ -441,7 +447,7 @@ defineExpose({ focusComposer });
       </div>
 
       <NDropdown trigger="manual" placement="top-start" scrollable :show="composerMenuVisible" :options="composerDropdownOptions" :menu-props="composerMenuProps" @select="selectComposerOption">
-        <NInput ref="composer" v-model:value="pane.draft" type="textarea" :autosize="{ minRows: 2, maxRows: 8 }" placeholder="发送消息；输入 / 查看命令，@ 使用 Skill，$ 引用文件" @click="syncComposerCaret" @keyup="syncComposerCaret" @select="syncComposerCaret" @keydown="handleKeydown" @paste="handlePaste" />
+        <NInput ref="composer" v-model:value="pane.draft" type="textarea" :autosize="{ minRows: 2, maxRows: 8 }" :input-props="noSpellcheckInputProps" placeholder="发送消息；输入 / 查看命令，@ 使用 Skill，$ 引用文件" @click="syncComposerCaret" @keyup="syncComposerCaret" @select="syncComposerCaret" @keydown="handleKeydown" @paste="handlePaste" />
       </NDropdown>
 
       <div class="composer-actions">
@@ -462,9 +468,9 @@ defineExpose({ focusComposer });
           </div>
         </div>
         <div class="composer-submit">
-          <NButton v-if="pane.activeTurnId" size="small" secondary @click="submitComposer"><template #icon><NIcon :component="AddOutline" /></template>追加</NButton>
+          <NButton v-if="pane.activeTurnId" size="small" secondary :disabled="composerUnavailable" @click="submitComposer"><template #icon><NIcon :component="AddOutline" /></template>追加</NButton>
           <NButton v-if="pane.activeTurnId" size="small" type="error" secondary @click="emit('interrupt')"><template #icon><NIcon :component="PauseOutline" /></template>停止</NButton>
-          <NButton v-else size="small" type="primary" :disabled="(!pane.draft.trim() && pane.attachments.length === 0 && pane.references.length === 0) || !modelSupportsImage && pane.attachments.length > 0" @click="submitComposer"><template #icon><NIcon :component="SendOutline" /></template>发送</NButton>
+          <NButton v-else size="small" type="primary" :disabled="composerUnavailable" @click="submitComposer"><template #icon><NIcon :component="SendOutline" /></template>发送</NButton>
         </div>
       </div>
 
