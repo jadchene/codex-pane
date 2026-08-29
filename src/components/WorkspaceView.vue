@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from "vue";
 import type { ComponentPublicInstance } from "vue";
+import { NButton, NIcon, NTooltip } from "naive-ui";
+import { ChevronBackOutline, ChevronForwardOutline } from "@vicons/ionicons5";
 import { Pane, Splitpanes } from "splitpanes";
 import "splitpanes/dist/splitpanes.css";
 import { useWorkspaceStore } from "../stores/workspace";
@@ -12,6 +14,7 @@ const store = useWorkspaceStore();
 type PaneHostInstance = ComponentPublicInstance & { focusComposer: () => void };
 const paneHosts = ref<Record<number, PaneHostInstance | null>>({});
 const sessionSidebar = ref<InstanceType<typeof SessionSidebar> | null>(null);
+const sidebarCollapsed = ref(false);
 const sessionPaneIndex = computed(() => {
   const index = store.state.panes.findIndex((pane) => pane.id === store.state.focusedPaneId);
   return index >= 0 ? index : 0;
@@ -55,14 +58,24 @@ const moveFocus = (event: KeyboardEvent): void => {
   event.preventDefault();
   void focusPane(nextRow * dimensions.columns + nextColumn);
 };
-const focusSessionList = (): void => sessionSidebar.value?.focusSearch();
+const focusSessionList = async (): Promise<void> => {
+  sidebarCollapsed.value = false;
+  await nextTick();
+  sessionSidebar.value?.focusSearch();
+};
 defineExpose({ focusPaneById, focusSessionList });
 </script>
 
 <template>
   <main class="workspace" :class="[`workspace-layout-${store.state.layout}`, `workspace-mode-${store.state.workspaceMode}`]" @keydown="moveFocus">
-    <div v-if="store.state.workspaceMode === 'sessionSidebar'" class="session-workspace">
-      <SessionSidebar ref="sessionSidebar" :pane="sessionPane" @activate-pane="focusPaneById" />
+    <div v-if="store.state.workspaceMode === 'sessionSidebar'" class="session-workspace" :class="{ 'session-workspace-sidebar-collapsed': sidebarCollapsed }">
+      <div class="session-sidebar-shell">
+        <SessionSidebar v-if="!sidebarCollapsed" ref="sessionSidebar" :pane="sessionPane" @activate-pane="focusPaneById" />
+        <NTooltip placement="right">
+          <template #trigger><NButton quaternary circle size="small" class="session-sidebar-collapse" :aria-label="sidebarCollapsed ? '展开会话侧栏' : '收起会话侧栏'" @click="sidebarCollapsed = !sidebarCollapsed"><template #icon><NIcon :component="sidebarCollapsed ? ChevronForwardOutline : ChevronBackOutline" /></template></NButton></template>
+          {{ sidebarCollapsed ? "展开会话侧栏" : "收起会话侧栏，专注当前对话" }}
+        </NTooltip>
+      </div>
       <div class="session-workspace-pane">
         <PaneHost :ref="instance => setPaneHost(sessionPaneIndex, instance)" :index="sessionPaneIndex" include-global-requests @open-sessions="emit('openSessions', $event)" />
       </div>

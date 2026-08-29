@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, h, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { NAlert, NButton, NDropdown, NIcon, NInput, NSelect, NTag, NText, NTooltip } from "naive-ui";
-import { AddOutline, ArrowDownOutline, AttachOutline, DocumentTextOutline, LinkOutline, PauseOutline, SendOutline } from "@vicons/ionicons5";
+import { AddOutline, ArrowDownOutline, AttachOutline, DocumentTextOutline, FolderOpenOutline, LinkOutline, PauseOutline, SendOutline } from "@vicons/ionicons5";
 import type { ItemAction, PaneState, PendingServerRequest, UiItem } from "../types";
 import ApprovalCenter from "./ApprovalCenter.vue";
 import ItemCard from "./ItemCard.vue";
@@ -30,6 +30,7 @@ const emit = defineEmits<{
   newThread: [];
   openSessions: [];
   chooseAttachments: [];
+  chooseDirectory: [];
   openSkills: [];
   pasteAttachments: [paths: string[]];
   slashCommand: [command: string];
@@ -52,9 +53,13 @@ const composerCaret = ref(0);
 const restoredThreadId = ref<string | null>(null);
 const slashIndex = ref(-1);
 const fileSuggestions = ref<Array<{ name: string; path: string; relativePath: string }>>([]);
+const fileSearchState = ref<"idle" | "searching" | "ready" | "error">("idle");
+const composerMenuDismissed = ref(false);
+const composerHint = ref("");
 let fileSearchSequence = 0;
 let fileSearchTimer: ReturnType<typeof setTimeout> | null = null;
-const effortOptions = computed(() => props.models.find((model) => model.value === props.pane.model)?.efforts.map((effort) => ({ label: effort, value: effort })) ?? []);
+const effortLabels: Record<string, string> = { minimal: "最低", low: "低", medium: "中等", high: "高", xhigh: "极高" };
+const effortOptions = computed(() => props.models.find((model) => model.value === props.pane.model)?.efforts.map((effort) => ({ label: effortLabels[effort] ?? effort, value: effort })) ?? []);
 const modelSupportsImage = computed(() => {
   const model = props.models.find((candidate) => candidate.value === props.pane.model);
   return !model || model.inputModalities.length === 0 || model.inputModalities.includes("image");
@@ -93,16 +98,13 @@ const filteredSkills = computed(() => skillQuery.value === null ? [] : props.pan
 const fileToken = computed(() => activeToken("$"));
 const fileQuery = computed(() => fileToken.value?.query ?? null);
 const composerMenuMode = computed<"slash" | "skill" | "file" | null>(() => slashQuery.value !== null ? "slash" : skillQuery.value !== null ? "skill" : fileQuery.value !== null ? "file" : null);
-const composerMenuVisible = computed(() => composerMenuMode.value === "slash"
-  ? filteredSlashOptions.value.length > 0
-  : composerMenuMode.value === "skill"
-    ? filteredSkills.value.length > 0
-    : composerMenuMode.value === "file" && fileSuggestions.value.length > 0);
+const composerMenuVisible = computed(() => composerMenuMode.value !== null && !composerMenuDismissed.value);
 const effectiveCwd = computed(() => props.pane.cwd || props.defaultCwd || "未设置工作目录");
-const contextLabel = computed(() => {
+const contextUsedPercent = computed(() => {
   const remaining = props.pane.contextRemainingPercent;
-  return `上下文已用 ${typeof remaining === "number" ? 100 - Math.min(100, Math.max(0, remaining)) : 0}%`;
+  return typeof remaining === "number" ? 100 - Math.min(100, Math.max(0, remaining)) : null;
 });
+const contextLabel = computed(() => contextUsedPercent.value === null ? "" : `上下文已用 ${contextUsedPercent.value}%`);
 const permissionModeLabel = computed(() => {
   const reviewer = props.pane.approvalsReviewer ?? props.approvalReviewer ?? "";
   const policy = props.pane.approvalPolicy ?? props.approvalPolicy;
@@ -118,7 +120,7 @@ const goalStatusLabel = computed(() => {
   if (!goal || goal.status === "complete") return "";
   const status = String(goal.status ?? "active");
   const elapsedSeconds = typeof goal.timeUsedSeconds === "number" ? Math.max(0, Math.floor(goal.timeUsedSeconds)) : 0;
-  const elapsed = `${Math.floor(elapsedSeconds / 3600)}时${Math.floor(elapsedSeconds % 3600 / 60)}分`;
+  const elapsed = elapsedSeconds < 60 ? "不足 1 分钟" : elapsedSeconds < 3600 ? `${Math.floor(elapsedSeconds / 60)} 分钟` : `${Math.floor(elapsedSeconds / 3600)} 小时 ${Math.floor(elapsedSeconds % 3600 / 60)} 分钟`;
   return `目标：${({ active: "进行中", paused: "已暂停", blocked: "受阻", usageLimited: "用量受限", budgetLimited: "预算受限" } as Record<string, string>)[status] ?? status} · ${elapsed}`;
 });
 const activeSubAgentCount = computed(() => Object.values(props.pane.subAgents ?? {}).filter((agent) => ["pendingInit", "running", "unknown"].includes(agent.status)).length);
@@ -127,26 +129,40 @@ const composerUnavailable = computed(() => (!props.pane.draft.trim() && props.pa
   || !modelSupportsImage.value && props.pane.attachments.length > 0
   || props.pane.status === "starting"
   || props.pane.status === "interrupting");
+const composerDisabledReason = computed(() => {
+  if (!modelSupportsImage.value && props.pane.attachments.length > 0) return "当前模型不支持图片，请移除图片或切换模型。";
+  if (props.pane.status === "starting") return "会话正在启动，请稍候。";
+  if (props.pane.status === "interrupting") return "正在停止当前任务，请稍候。";
+  return "";
+});
 const noSpellcheckInputProps = { spellcheck: false, autocorrect: "off", autocapitalize: "off" } as const;
 const modelSelectLabels = computed(() => ["模型", ...props.models.map((model) => model.label)]);
 const effortSelectLabels = computed(() => ["推理", ...effortOptions.value.map((option) => option.label)]);
 const composerDropdownOptions = computed(() => {
   if (composerMenuMode.value === "slash") {
+    if (!filteredSlashOptions.value.length) return [{ key: "empty:slash", disabled: true, label: "没有匹配的命令" }];
     return filteredSlashOptions.value.map((option, index) => ({
       key: `slash:${option.key}`,
       label: () => h("div", { class: "composer-command-option", onMouseenter: () => { slashIndex.value = index; } }, [
-        h("strong", option.label),
-        index === slashIndex.value ? h("span", { class: "composer-option-hint" }, [
+        h("strong", { class: "composer-option-title" }, option.label),
+        h("span", { class: "composer-option-hint" }, [
           h("span", { class: "composer-option-description" }, option.description),
           option.usage !== option.label ? h("code", { class: "composer-option-usage" }, option.usage) : null
-        ]) : null
+        ])
       ]),
       props: { class: index === slashIndex.value ? "slash-option-active" : "", onMouseenter: () => { slashIndex.value = index; } }
     }));
   }
+  if (composerMenuMode.value === "skill" && !filteredSkills.value.length) {
+    return [{ key: "empty:skill", disabled: true, label: props.pane.skills.length ? "没有匹配的 Skill" : "暂无可用 Skill" }];
+  }
+  if (composerMenuMode.value === "file" && !fileSuggestions.value.length) {
+    const label = fileSearchState.value === "searching" ? "正在搜索工作区文件…" : fileSearchState.value === "error" ? "文件搜索失败，请重试" : "没有匹配的文件";
+    return [{ key: "empty:file", disabled: true, label }];
+  }
   const options = composerMenuMode.value === "skill"
-    ? filteredSkills.value.map((skill) => ({ key: `skill:${skill.name}`, label: skill.name }))
-    : fileSuggestions.value.map((file) => ({ key: `file:${file.path}`, label: file.relativePath }));
+    ? filteredSkills.value.map((skill) => ({ key: `skill:${skill.name}`, label: () => h("div", { class: "composer-rich-option" }, [h("strong", skill.name), skill.description ? h("span", skill.description) : null]) }))
+    : fileSuggestions.value.map((file) => ({ key: `file:${file.path}`, label: () => h("div", { class: "composer-rich-option" }, [h("strong", file.name), h("span", file.relativePath)]) }));
   return options.map((option, index) => ({ ...option, props: { class: index === slashIndex.value ? "slash-option-active" : "", onMouseenter: () => { slashIndex.value = index; } } }));
 });
 const composerMenuProps = () => ({ class: "composer-options-menu", style: "max-height: min(320px, calc(100vh - 180px));" });
@@ -259,7 +275,7 @@ const handleKeydown = (event: KeyboardEvent): void => {
     void forceScrollToBottom();
     return;
   }
-  if (composerMenuVisible.value && event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+  if (composerMenuVisible.value && activeComposerOptions.value.length > 0 && event.key === "Enter" && !event.shiftKey && !event.isComposing) {
     event.preventDefault();
     const option = activeComposerOptions.value[slashIndex.value] ?? activeComposerOptions.value[0];
     if (composerMenuMode.value === "slash" && option && "key" in option) {
@@ -271,6 +287,7 @@ const handleKeydown = (event: KeyboardEvent): void => {
     return;
   }
   if (composerMenuVisible.value && ["ArrowDown", "ArrowUp", "Tab"].includes(event.key)) {
+    if (!activeComposerOptions.value.length) return;
     event.preventDefault();
     if (event.key === "ArrowDown") slashIndex.value = (slashIndex.value + 1) % activeComposerOptions.value.length;
     else if (event.key === "ArrowUp") slashIndex.value = slashIndex.value < 0 ? activeComposerOptions.value.length - 1 : (slashIndex.value - 1 + activeComposerOptions.value.length) % activeComposerOptions.value.length;
@@ -286,11 +303,8 @@ const handleKeydown = (event: KeyboardEvent): void => {
     return;
   }
   if (event.key === "Escape" && composerMenuVisible.value) {
-    if (composerMenuMode.value === "slash") props.pane.draft = "";
-    else {
-      const token = composerMenuMode.value === "skill" ? skillToken.value : fileToken.value;
-      if (token) replaceComposerToken(token, "");
-    }
+    event.preventDefault();
+    composerMenuDismissed.value = true;
     return;
   }
   if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
@@ -319,13 +333,25 @@ const handlePaste = (event: ClipboardEvent): void => {
   }
 };
 const openSlashMenu = (): void => {
+  if (props.pane.draft.trim()) {
+    composerHint.value = "斜杠命令只能从空输入框开始；当前草稿已为你保留。";
+    void focusComposer();
+    return;
+  }
   props.pane.draft = "/";
   slashIndex.value = -1;
+  composerMenuDismissed.value = false;
   void focusComposer();
 };
 const openSkillMenu = (): void => {
   if (!skillToken.value) replaceComposerToken({ start: composerCaret.value, end: composerCaret.value, query: "" }, "@");
   slashIndex.value = -1;
+  composerMenuDismissed.value = false;
+};
+const openFileMenu = (): void => {
+  if (!fileToken.value) replaceComposerToken({ start: composerCaret.value, end: composerCaret.value, query: "" }, "$");
+  slashIndex.value = -1;
+  composerMenuDismissed.value = false;
 };
 const activatePane = (event: MouseEvent): void => {
   emit("activate");
@@ -345,6 +371,8 @@ watch(() => props.pendingRequests.length, (count, previous) => {
   if (previous > count) void focusComposer();
 });
 watch(() => props.pane.draft, async () => {
+  composerMenuDismissed.value = false;
+  composerHint.value = "";
   await nextTick();
   const textarea = composerTextarea();
   composerCaret.value = textarea?.selectionStart ?? props.pane.draft.length;
@@ -363,14 +391,22 @@ watch(fileQuery, (query) => {
   const sequence = ++fileSearchSequence;
   if (query === null || !props.searchFiles) {
     fileSuggestions.value = [];
+    fileSearchState.value = "idle";
     return;
   }
+  fileSearchState.value = "searching";
   fileSearchTimer = setTimeout(async () => {
     try {
       const files = await props.searchFiles!(query);
-      if (sequence === fileSearchSequence) fileSuggestions.value = files;
+      if (sequence === fileSearchSequence) {
+        fileSuggestions.value = files;
+        fileSearchState.value = "ready";
+      }
     } catch {
-      if (sequence === fileSearchSequence) fileSuggestions.value = [];
+      if (sequence === fileSearchSequence) {
+        fileSuggestions.value = [];
+        fileSearchState.value = "error";
+      }
     }
   }, 120);
 });
@@ -417,7 +453,14 @@ defineExpose({ focusComposer });
     <VirtualList ref="output" class="pane-output" :items="pane.items" :item-key="itemKey" :estimate-size="estimateItemSize" :min-item-size="56" :buffer="240" :follow-tail="pane.followTail" role="log" aria-live="polite" aria-relevant="additions" @scroll="handleOutputScroll">
       <template #before><div v-if="pane.historyLoading" class="history-loading">正在加载更早内容…</div></template>
       <template #default="{ item }"><div class="conversation-item"><ItemCard :item="item" :unwrap-power-shell="unwrapPowerShellCommands" :command-shell-path="commandShellPath" :mcp-gateway-adaptation="mcpGatewayAdaptation" @action="emit('itemAction', $event)" /></div></template>
-      <template #empty><div class="empty-conversation"><NText depth="3">输入消息开始会话</NText></div></template>
+      <template #empty>
+        <div class="empty-conversation">
+          <div class="empty-conversation-content">
+            <strong>{{ showTitle === false ? "开始一段新会话" : "此窗格已就绪" }}</strong>
+            <NText depth="3">在下方描述任务；输入 <kbd>/</kbd> 执行命令、<kbd>@</kbd> 使用 Skill、<kbd>$</kbd> 引用工作区文件。</NText>
+          </div>
+        </div>
+      </template>
     </VirtualList>
     <NButton v-if="!pane.followTail && pane.items.length" class="scroll-to-bottom" size="small" secondary round aria-label="回到最新消息" @click="forceScrollToBottom">
       <template #icon><NIcon :component="ArrowDownOutline" /></template>
@@ -451,15 +494,22 @@ defineExpose({ focusComposer });
       </div>
 
       <NDropdown trigger="manual" placement="top-start" scrollable :show="composerMenuVisible" :options="composerDropdownOptions" :menu-props="composerMenuProps" @select="selectComposerOption">
-        <NInput ref="composer" v-model:value="pane.draft" type="textarea" :maxlength="200000" :autosize="{ minRows: 2, maxRows: 8 }" :input-props="{ ...noSpellcheckInputProps, 'aria-label': '消息输入框' }" placeholder="发送消息；输入 / 查看命令，@ 使用 Skill，$ 引用文件" @click="syncComposerCaret" @keyup="syncComposerCaret" @select="syncComposerCaret" @keydown="handleKeydown" @paste="handlePaste" />
+        <NInput ref="composer" v-model:value="pane.draft" type="textarea" :maxlength="200000" :autosize="{ minRows: 2, maxRows: 8 }" :input-props="{ ...noSpellcheckInputProps, 'aria-label': '消息输入框' }" placeholder="描述任务，或输入 /、@、$ 快速开始…" @click="syncComposerCaret" @keyup="syncComposerCaret" @select="syncComposerCaret" @keydown="handleKeydown" @paste="handlePaste" />
       </NDropdown>
+
+      <div v-if="composerDisabledReason || composerHint || pane.draft.length >= 180000" class="composer-notice" role="status">
+        <span v-if="composerDisabledReason" class="composer-warning">{{ composerDisabledReason }}</span>
+        <span v-else-if="composerHint">{{ composerHint }}</span>
+        <span v-if="pane.draft.length >= 180000">还可输入 {{ (200000 - pane.draft.length).toLocaleString() }} 个字符</span>
+      </div>
 
       <div class="composer-actions">
         <div class="composer-tools">
           <NTooltip><template #trigger><NButton quaternary circle size="small" aria-label="斜杠命令" @click="openSlashMenu">/</NButton></template>斜杠命令</NTooltip>
           <NTooltip><template #trigger><NButton quaternary circle size="small" aria-label="选择 Skill" @click="openSkillMenu">@</NButton></template>选择 Skill</NTooltip>
-          <NTooltip><template #trigger><NButton quaternary circle size="small" aria-label="添加附件" @click="emit('chooseAttachments')"><template #icon><NIcon :component="AttachOutline" /></template></NButton></template>添加附件</NTooltip>
-          <span class="cwd-text">{{ effectiveCwd }}</span>
+          <NTooltip><template #trigger><NButton quaternary circle size="small" aria-label="引用工作区文件" @click="openFileMenu">$</NButton></template>引用工作区文件</NTooltip>
+          <NTooltip><template #trigger><NButton quaternary circle size="small" aria-label="添加附件" @click="emit('chooseAttachments')"><template #icon><NIcon :component="AttachOutline" /></template></NButton></template>添加文件或图片</NTooltip>
+          <NTooltip><template #trigger><NButton text class="cwd-button" aria-label="切换当前工作目录" @click="emit('chooseDirectory')"><template #icon><NIcon :component="FolderOpenOutline" /></template><span class="cwd-text">{{ effectiveCwd }}</span></NButton></template>{{ effectiveCwd }} · 点击切换目录</NTooltip>
         </div>
         <div class="composer-selects">
           <div class="content-fit-select model-select-fit">
@@ -479,7 +529,7 @@ defineExpose({ focusComposer });
       </div>
 
       <footer class="status-line">
-        <span v-if="pane.status === 'running' || pane.status === 'starting'" class="working-indicator" role="status">Working<span class="working-dots">...</span></span>
+        <span v-if="pane.status === 'running' || pane.status === 'starting'" class="working-indicator" role="status">处理中<span class="working-dots">...</span></span>
         <span v-if="permissionModeLabel" class="auto-review-indicator" role="status">{{ permissionModeLabel }}</span>
         <span v-if="pane.collaborationMode === 'plan'">计划模式</span>
         <span v-if="goalStatusLabel">{{ goalStatusLabel }}</span>
@@ -487,7 +537,7 @@ defineExpose({ focusComposer });
         <span v-else-if="pane.activeFlags?.includes('waitingOnUserInput')">等待你的选择</span>
         <span v-if="activeSubAgentCount">子代理 {{ activeSubAgentCount }}</span>
         <span v-if="backgroundTaskCount">后台任务 {{ backgroundTaskCount }}</span>
-        <span>{{ contextLabel }}</span>
+        <span v-if="contextLabel" class="context-usage" :class="{ 'context-usage-warning': (contextUsedPercent ?? 0) >= 80, 'context-usage-critical': (contextUsedPercent ?? 0) >= 95 }" :title="`剩余 ${100 - (contextUsedPercent ?? 0)}%`">{{ contextLabel }}</span>
         <span v-for="label in rateLimitLabels" :key="label">{{ label }}</span>
       </footer>
     </div>

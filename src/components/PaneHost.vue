@@ -60,6 +60,7 @@ defineExpose({ focusComposer });
     @new-thread="store.newThread(pane)"
     @open-sessions="emit('openSessions', pane.id)"
     @choose-attachments="store.chooseAttachments(pane)"
+    @choose-directory="store.chooseDirectory(pane)"
     @open-skills="store.refreshSkills(pane)"
     @paste-attachments="store.pasteAttachments(pane, $event)"
     @slash-command="store.executeSlashCommand(pane, $event)"

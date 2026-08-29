@@ -1693,12 +1693,8 @@ export const useWorkspaceStore = defineStore("workspace", () => {
 
   const setWorkspaceMode = (workspaceMode: WorkspaceMode): void => {
     state.value.workspaceMode = workspaceMode;
-    if (workspaceMode === "sessionSidebar") {
-      const focusedPaneId = state.value.focusedPaneId;
-      for (const pane of state.value.panes) {
-        if (pane.id !== focusedPaneId && pane.threadId && !isPaneWorking(pane)) void releaseSidebarPane(pane, false);
-      }
-    } else if (state.value.focusedPaneId?.startsWith(SIDEBAR_PANE_PREFIX)) {
+    if (workspaceMode === "panes" && state.value.focusedPaneId?.startsWith(SIDEBAR_PANE_PREFIX)
+      && state.value.panes.findIndex((pane) => pane.id === state.value.focusedPaneId) >= LAYOUT_PANE_COUNTS[state.value.layout]) {
       state.value.focusedPaneId = state.value.panes.find((pane) => !pane.id.startsWith(SIDEBAR_PANE_PREFIX))?.id ?? null;
     }
     scheduleSave();

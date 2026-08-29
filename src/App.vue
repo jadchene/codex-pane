@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watchEffect } from "vue";
-import { darkTheme, dateZhCN, NAlert, NButton, NCheckbox, NConfigProvider, NDialogProvider, NDropdown, NIcon, NLayout, NLayoutHeader, NMessageProvider, NModal, NSpace, NSpin, NText, NTooltip, zhCN } from "naive-ui";
-import { CloseOutline, GridOutline, ReloadOutline, ScanOutline, SettingsOutline } from "@vicons/ionicons5";
+import { darkTheme, dateZhCN, NAlert, NButton, NButtonGroup, NCheckbox, NConfigProvider, NDialogProvider, NDropdown, NIcon, NLayout, NLayoutHeader, NMessageProvider, NModal, NSpace, NSpin, NText, NTooltip, zhCN } from "naive-ui";
+import { CloseOutline, GridOutline, ListOutline, ReloadOutline, ScanOutline, SettingsOutline } from "@vicons/ionicons5";
 import hljs from "highlight.js/lib/core";
 import powershell from "highlight.js/lib/languages/powershell";
 import { useWorkspaceStore } from "./stores/workspace";
@@ -107,7 +107,14 @@ const confirmLayoutReduction = (): void => {
 const selectWorkspaceMode = (workspaceMode: WorkspaceMode): void => {
   if (workspaceMode === store.state.workspaceMode) return;
   if (workspaceMode === "panes") {
+    const focusedIndex = store.state.panes.findIndex((pane) => pane.id === store.state.focusedPaneId);
+    const visibleCount = layoutPaneCounts[store.state.layout];
+    if (focusedIndex >= visibleCount) {
+      const targetIndex = Math.max(0, visibleCount - 1);
+      [store.state.panes[targetIndex], store.state.panes[focusedIndex]] = [store.state.panes[focusedIndex]!, store.state.panes[targetIndex]!];
+    }
     store.setWorkspaceMode(workspaceMode);
+    void nextTick(() => workspaceView.value?.focusPaneById?.(store.state.focusedPaneId));
     return;
   }
   const visiblePanes = store.state.panes.slice(0, layoutPaneCounts[store.state.layout]);
@@ -174,10 +181,16 @@ const closeSessions = async (): Promise<void> => {
 
 let removeFullscreenListener: (() => void) | null = null;
 let removeMaximizedListener: (() => void) | null = null;
+const handleGlobalKeydown = (event: KeyboardEvent): void => {
+  if (event.key.toLowerCase() !== "m" || !event.ctrlKey || !event.shiftKey || event.altKey || event.metaKey) return;
+  event.preventDefault();
+  selectWorkspaceMode(store.state.workspaceMode === "panes" ? "sessionSidebar" : "panes");
+};
 onMounted(() => {
   removeFullscreenListener = window.codexPane.onFullScreenChange((value) => { fullScreen.value = value; });
   removeMaximizedListener = window.codexPane.onMaximizedChange((value) => { maximized.value = value; });
   void window.codexPane.isMaximized().then((value) => { maximized.value = value; });
+  window.addEventListener("keydown", handleGlobalKeydown);
   void store.initialize().catch((error) => {
     store.state.initialized = true;
     store.state.connection = {
@@ -198,6 +211,7 @@ watchEffect(() => {
 onUnmounted(() => {
   removeFullscreenListener?.();
   removeMaximizedListener?.();
+  window.removeEventListener("keydown", handleGlobalKeydown);
 });
 </script>
 
@@ -211,6 +225,10 @@ onUnmounted(() => {
               <div class="titlebar-identity"><img :src="appIconUrl" alt="" /><span>Codex Pane</span><span class="titlebar-status" :class="`titlebar-status-${connectionStatus.tone}`" role="status"><i />{{ connectionStatus.label }}</span></div>
               <div class="titlebar-drag-region" aria-hidden="true" />
               <div class="titlebar-actions">
+                <NButtonGroup class="workspace-mode-switch" size="tiny" aria-label="工作台模式">
+                  <NTooltip><template #trigger><NButton :type="store.state.workspaceMode === 'panes' ? 'primary' : 'default'" :secondary="store.state.workspaceMode === 'panes'" aria-label="切换到多窗格模式" @click="selectWorkspaceMode('panes')"><template #icon><NIcon :component="GridOutline" /></template><span class="workspace-mode-label">多窗格</span></NButton></template>并行查看多个任务 · Ctrl+Shift+M</NTooltip>
+                  <NTooltip><template #trigger><NButton :type="store.state.workspaceMode === 'sessionSidebar' ? 'primary' : 'default'" :secondary="store.state.workspaceMode === 'sessionSidebar'" aria-label="切换到会话侧栏模式" @click="selectWorkspaceMode('sessionSidebar')"><template #icon><NIcon :component="ListOutline" /></template><span class="workspace-mode-label">会话</span></NButton></template>集中浏览历史会话 · Ctrl+Shift+M</NTooltip>
+                </NButtonGroup>
                 <NTooltip><template #trigger><NButton quaternary circle size="small" aria-label="设置" @click="settingsOpen = true"><template #icon><NIcon :component="SettingsOutline" /></template></NButton></template>设置</NTooltip>
                 <NDropdown v-if="store.state.workspaceMode === 'panes'" trigger="click" :options="layoutOptions" @select="selectLayout">
                   <NButton quaternary circle size="small" :aria-label="`切换窗格布局，当前${layoutLabels[store.state.layout]}`"><template #icon><NIcon :component="GridOutline" /></template></NButton>
@@ -266,7 +284,8 @@ onUnmounted(() => {
 .app-root .topbar, .app-root .pane-header, .app-root .composer { color: var(--app-text); background: var(--app-surface); border-color: var(--app-border); }
 .app-root .status-line { color: var(--app-muted); background: var(--app-surface); border-color: var(--app-border); }
 .app-root .tool-card { color: var(--app-text); background: var(--app-surface); border-color: var(--app-border); }
-.app-root .message-agent, .app-root .message-user, .app-root .attachment-chip { color: var(--app-text); background: var(--app-raised); border-color: var(--app-border); }
+.app-root .message-user, .app-root .attachment-chip { color: var(--app-text); background: var(--app-raised); border-color: var(--app-border); }
+.app-root .message-agent { color: var(--app-text); background: transparent; border-color: transparent; }
 .app-root .markdown-content { color: var(--app-text); }
 .app-root .markdown-content pre, .app-root .request-json { color: var(--app-text); background: var(--app-raised); border-color: var(--app-border); }
 .app-root .markdown-content :not(pre) > code { color: var(--app-accent); background: var(--app-raised); }
@@ -286,6 +305,8 @@ onUnmounted(() => {
 .titlebar-drag-region { min-width: 24px; flex: 1 1 auto; align-self: stretch; }
 .titlebar-actions, .window-controls { position: relative; z-index: 1; display: flex; align-items: center; height: 100%; -webkit-app-region: no-drag; }
 .titlebar-actions { gap: 2px; padding-right: 8px; }
+.workspace-mode-switch { margin-right: 5px; -webkit-app-region: no-drag; }
+.workspace-mode-switch .n-button { min-width: 72px; }
 .window-control { width: 46px; height: 100%; border-radius: 0; }
 .window-control .n-button__content { display: grid; width: 100%; height: 100%; place-items: center; }
 .window-control-close:hover { color: #fff !important; background: #c42b1c !important; }
@@ -305,6 +326,8 @@ onUnmounted(() => {
 .layout-pane-copy small { color: var(--app-muted); }
 @media (max-width: 760px) {
   .titlebar-status { display: none; }
+  .workspace-mode-switch .n-button { min-width: 34px; padding-inline: 8px; }
+  .workspace-mode-label { display: none; }
   .titlebar-actions .n-button__content { font-size: 0; }
   .window-control { width: 40px; }
 }

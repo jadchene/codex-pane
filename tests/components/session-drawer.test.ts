@@ -23,16 +23,16 @@ describe("SessionDrawer", () => {
       global: { stubs: { teleport: true } }
     });
 
-    expect(wrapper.text()).toContain("当前目录：E:\\AI-Workspace");
+    expect(wrapper.text()).toContain("仅显示：E:\\AI-Workspace");
     await wrapper.get(".session-scope-button").trigger("click");
     expect(wrapper.emitted("scope")).toEqual([[true, ""]]);
 
     await wrapper.setProps({ showAll: true });
-    expect(wrapper.text()).toContain("所有工作目录");
+    expect(wrapper.text()).toContain("正在显示所有工作目录");
     expect(wrapper.get(".session-scope-button").text()).toBe("仅当前目录");
   });
 
-  it("shows one session title without a second preview line", () => {
+  it("shows a renamed session title with a preview that helps distinguish it", () => {
     const wrapper = mount(SessionDrawer, {
       props: {
         show: true,
@@ -45,7 +45,7 @@ describe("SessionDrawer", () => {
     });
 
     expect(wrapper.text()).toContain("重命名标题");
-    expect(wrapper.text()).not.toContain("协议里的第二行预览");
-    expect(wrapper.find(".session-preview").exists()).toBe(false);
+    expect(wrapper.text()).toContain("协议里的第二行预览");
+    expect(wrapper.get(".session-preview").text()).toBe("协议里的第二行预览");
   });
 });

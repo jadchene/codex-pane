@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, onUnmounted, ref, watch } from "vue";
+import { computed, nextTick, onUnmounted, ref, watch } from "vue";
 import { NButton, NEmpty, NIcon, NInput, NList, NListItem, NSpin, NTag, NText, NTime } from "naive-ui";
 import { AddOutline, SyncOutline } from "@vicons/ionicons5";
 import type { ThreadSummary } from "../types";
@@ -22,7 +22,7 @@ const props = withDefaults(defineProps<{
   showNew: false,
   showResumeButton: false,
   searchPlaceholder: "搜索会话",
-  showAllLabel: "全部",
+  showAllLabel: "所有目录",
   currentOnlyLabel: "当前目录",
   unreadThreadIds: () => [],
   workingThreadIds: () => []
@@ -37,6 +37,9 @@ const search = ref("");
 const searchInput = ref<{ focus: () => void } | null>(null);
 const noSpellcheckInputProps = { spellcheck: false, autocorrect: "off", autocapitalize: "off" } as const;
 let timer: ReturnType<typeof setTimeout> | null = null;
+const emptyDescription = computed(() => search.value.trim()
+  ? `没有找到与“${search.value.trim()}”匹配的会话`
+  : props.showAll ? "还没有历史会话" : "当前工作目录还没有会话");
 
 const focusSearch = async (): Promise<void> => {
   await nextTick();
@@ -62,11 +65,11 @@ defineExpose({ focusSearch });
         <NInput ref="searchInput" v-model:value="search" clearable :input-props="noSpellcheckInputProps" :placeholder="searchPlaceholder" aria-label="搜索历史会话" />
         <NButton secondary class="session-scope-button" :disabled="showAll && !currentCwd" @click="emit('scope', !showAll, search)">{{ showAll ? currentOnlyLabel : showAllLabel }}</NButton>
       </div>
-      <NText depth="3" class="session-scope-label">{{ showAll ? "所有工作目录" : `当前目录：${currentCwd || "未设置"}` }}</NText>
+      <NText depth="3" class="session-scope-label">{{ showAll ? "正在显示所有工作目录" : `仅显示：${currentCwd || "未设置工作目录"}` }}</NText>
     </div>
     <NSpin :show="loading" class="session-list-spin">
-      <div class="session-list-scroll">
-        <NEmpty v-if="threads.length === 0" description="没有会话" />
+      <div class="session-list-scroll" :aria-busy="loading">
+        <NEmpty v-if="threads.length === 0" :description="emptyDescription" />
         <NList v-else hoverable clickable class="session-list">
           <NListItem
             v-for="thread in threads"
@@ -97,6 +100,7 @@ defineExpose({ focusSearch });
                 <span class="session-meta-dot">·</span>
                 <NTime class="session-time" :time="thread.updatedAt * 1000" type="relative" />
               </div>
+              <span v-if="thread.name && thread.preview && thread.preview !== thread.name" class="session-preview">{{ thread.preview }}</span>
               </div>
             </button>
             <template v-if="showResumeButton" #suffix><NButton size="small" secondary class="session-resume-button" @click.stop="emit('resume', thread.id)">恢复</NButton></template>

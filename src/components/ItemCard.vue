@@ -596,10 +596,9 @@ const copyText = async (value: string): Promise<void> => {
 .message-agent {
   align-self: flex-start;
   width: min(100%, 920px);
-  padding: 8px 38px 8px 11px;
-  border: 1px solid var(--app-border, rgb(255 255 255 / 12%));
-  border-radius: 10px;
-  background: var(--app-raised, rgb(255 255 255 / 4%));
+  padding: 7px 38px 9px 5px;
+  border: 0;
+  background: transparent;
 }
 
 .message-agent .copy-message-button {
@@ -609,8 +608,8 @@ const copyText = async (value: string): Promise<void> => {
 }
 
 .message-user {
-  background: var(--app-raised, rgb(255 255 255 / 4%));
-  border-color: var(--app-border, rgb(255 255 255 / 12%));
+  background: color-mix(in srgb, var(--app-accent, #10a37f) 10%, var(--app-raised, rgb(255 255 255 / 4%)));
+  border-color: color-mix(in srgb, var(--app-accent, #10a37f) 28%, var(--app-border, rgb(255 255 255 / 12%)));
 }
 .message-agent :deep(.markdown-content a) { cursor: pointer !important; }
 

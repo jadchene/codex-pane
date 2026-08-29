@@ -111,11 +111,13 @@ describe("App titlebar", () => {
     expect(store.state.layout).toBe("six");
   });
 
-  it("switches to the session sidebar without changing the saved pane layout", async () => {
+  it("switches modes directly from the titlebar without changing the saved pane layout", async () => {
     const pinia = createPinia();
     setActivePinia(pinia);
     const store = useWorkspaceStore();
     store.state.layout = "quad";
+    store.state.panes[1]!.threadId = "thread-idle";
+    store.state.panes[1]!.title = "应完整保留的会话";
     vi.spyOn(store, "initialize").mockResolvedValue(undefined);
     vi.spyOn(store, "scheduleSave").mockImplementation(() => undefined);
     vi.spyOn(store, "reconnect").mockResolvedValue(undefined);
@@ -131,16 +133,18 @@ describe("App titlebar", () => {
       }
     });
 
-    wrapper.getComponent(SettingsModal).vm.$emit("update:workspaceMode", "sessionSidebar");
+    await wrapper.get('button[aria-label="切换到会话侧栏模式"]').trigger("click");
     await wrapper.vm.$nextTick();
     expect(store.state.workspaceMode).toBe("sessionSidebar");
     expect(store.state.layout).toBe("quad");
+    expect(store.state.panes[1]!.threadId).toBe("thread-idle");
     expect(wrapper.findComponent(NDropdown).exists()).toBe(false);
 
-    wrapper.getComponent(SettingsModal).vm.$emit("update:workspaceMode", "panes");
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "m", ctrlKey: true, shiftKey: true }));
     await wrapper.vm.$nextTick();
     expect(store.state.workspaceMode).toBe("panes");
     expect(store.state.layout).toBe("quad");
+    expect(store.state.panes[1]!.title).toBe("应完整保留的会话");
     expect(wrapper.findComponent(NDropdown).exists()).toBe(true);
   });
 
@@ -171,5 +175,36 @@ describe("App titlebar", () => {
     expect(store.state.workspaceMode).toBe("sessionSidebar");
     expect(store.state.panes[1]!.status).toBe("running");
     expect(store.state.panes[1]!.activeTurnId).toBe("turn-running");
+  });
+
+  it("keeps the active sidebar-only session visible when returning to panes", async () => {
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    const store = useWorkspaceStore();
+    store.state.layout = "quad";
+    store.state.workspaceMode = "sessionSidebar";
+    const sidebarPane = { ...store.state.panes[5]!, id: "sidebar-pane-active", threadId: "thread-active", title: "当前侧栏会话" };
+    store.state.panes.push(sidebarPane);
+    store.state.focusedPaneId = sidebarPane.id;
+    vi.spyOn(store, "initialize").mockResolvedValue(undefined);
+    vi.spyOn(store, "scheduleSave").mockImplementation(() => undefined);
+    vi.spyOn(store, "reconnect").mockResolvedValue(undefined);
+    const wrapper = mount(App, {
+      global: {
+        plugins: [pinia],
+        stubs: {
+          WorkspaceView: { template: "<main />" },
+          SessionDrawer: true,
+          SettingsModal: true,
+          NTooltip: { template: "<span><slot name='trigger' /><slot /></span>" }
+        }
+      }
+    });
+
+    await wrapper.get('button[aria-label="切换到多窗格模式"]').trigger("click");
+    await wrapper.vm.$nextTick();
+    expect(store.state.workspaceMode).toBe("panes");
+    expect(store.state.focusedPaneId).toBe(sidebarPane.id);
+    expect(store.state.panes.slice(0, 4).some((pane) => pane.id === sidebarPane.id)).toBe(true);
   });
 });

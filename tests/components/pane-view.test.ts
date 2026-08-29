@@ -68,7 +68,7 @@ describe("PaneView compact workbench interactions", () => {
     }
     value.status = "running";
     await nextTick();
-    expect(wrapper.get('.status-line [role="status"]').text()).toContain("Working");
+    expect(wrapper.get('.status-line [role="status"]').text()).toContain("处理中");
     expect(wrapper.find(".composer-runtime-line").exists()).toBe(false);
   });
 
@@ -102,7 +102,7 @@ describe("PaneView compact workbench interactions", () => {
     value.goal = { objective: "完成适配", status: "active", timeUsedSeconds: 7_500 };
     await nextTick();
     expect(wrapper.get(".status-line").text()).toContain("计划模式");
-    expect(wrapper.get(".status-line").text()).toContain("目标：进行中 · 2时5分");
+    expect(wrapper.get(".status-line").text()).toContain("目标：进行中 · 2 小时 5 分钟");
 
     value.collaborationMode = "default";
     value.goal = { objective: "完成适配", status: "complete" };
@@ -153,7 +153,7 @@ describe("PaneView compact workbench interactions", () => {
     expect(wrapper.get(".composer-actions").findAllComponents(NSelect)).toHaveLength(2);
     expect(wrapper.find(".status-line .model-select").exists()).toBe(false);
     expect(wrapper.get(".model-select-fit .select-width-sizer").text()).toContain("GPT-5");
-    expect(wrapper.get(".effort-select-fit .select-width-sizer").text()).toContain("medium");
+    expect(wrapper.get(".effort-select-fit .select-width-sizer").text()).toContain("中等");
   });
 
   it("keeps composer input literal and disables empty sends and steering", async () => {
@@ -170,6 +170,15 @@ describe("PaneView compact workbench interactions", () => {
     value.draft = "";
     await nextTick();
     expect(wrapper.findAll("button").find((button) => button.text() === "追加")!.attributes("disabled")).toBeDefined();
+  });
+
+  it("does not overwrite a draft when the slash-command button is clicked", async () => {
+    const { value, wrapper } = mountPane();
+    value.draft = "这是一段尚未发送的草稿";
+    await nextTick();
+    await wrapper.get('button[aria-label="斜杠命令"]').trigger("click");
+    expect(value.draft).toBe("这是一段尚未发送的草稿");
+    expect(wrapper.get(".composer-notice").text()).toContain("当前草稿已为你保留");
   });
 
   it("does not let model or effort selectors return focus to the composer", async () => {
@@ -250,7 +259,7 @@ describe("PaneView compact workbench interactions", () => {
     expect(wrapper.get(".status-line").text()).toContain("上下文已用 38%");
   });
 
-  it("shows command-only rows and non-duplicated hints for the selected slash command", async () => {
+  it("shows scannable command descriptions and non-duplicated usage hints", async () => {
     const { wrapper } = mountPane();
     await wrapper.get('button[aria-label="斜杠命令"]').trigger("click");
     await nextTick();
@@ -264,7 +273,7 @@ describe("PaneView compact workbench interactions", () => {
     expect(agentsHint.text().match(/\/agents/g)).toHaveLength(1);
     const cdLabel = options[1]?.label as () => ReturnType<typeof h>;
     const commandOnly = mount(defineComponent({ setup: () => () => cdLabel() }));
-    expect(commandOnly.text()).toBe("/cd");
+    expect(commandOnly.text()).toBe("/cd切换工作目录");
     options[4]?.props?.onMouseenter?.({} as MouseEvent);
     await nextTick();
     options = wrapper.getComponent(NDropdown).props("options") ?? [];
@@ -324,7 +333,11 @@ describe("PaneView compact workbench interactions", () => {
       expect(searchFiles).toHaveBeenCalledWith("guide");
       const dropdown = wrapper.getComponent(NDropdown);
       expect(dropdown.props("show")).toBe(true);
-      expect(dropdown.props("options")?.map((option) => option.label)).toEqual(["README.md", "docs\\guide.md"]);
+      const optionLabels = (dropdown.props("options") ?? []).map((option) => {
+        const label = option.label as () => ReturnType<typeof h>;
+        return mount(defineComponent({ setup: () => () => label() })).text();
+      });
+      expect(optionLabels).toEqual(["README.mdREADME.md", "guide.mddocs\\guide.md"]);
       await textarea.trigger("keydown", { key: "ArrowDown" });
       await textarea.trigger("keydown", { key: "ArrowDown" });
       await textarea.trigger("keydown", { key: "Enter" });
@@ -345,7 +358,8 @@ describe("PaneView compact workbench interactions", () => {
       await vi.advanceTimersByTimeAsync(120);
       await nextTick();
       expect(searchFiles).toHaveBeenCalledWith("");
-      expect(wrapper.getComponent(NDropdown).props("show")).toBe(false);
+      expect(wrapper.getComponent(NDropdown).props("show")).toBe(true);
+      expect(wrapper.getComponent(NDropdown).props("options")?.[0]?.label).toBe("没有匹配的文件");
       await textarea.trigger("keydown", { key: "Enter" });
       expect(wrapper.emitted("send")).toHaveLength(1);
       expect(value.draft).toBe("请检查$");
@@ -394,7 +408,8 @@ describe("PaneView compact workbench interactions", () => {
     expect(value.draft).toBe("@");
     const composerDropdown = wrapper.findAllComponents(NDropdown).find((dropdown) => dropdown.props("trigger") === "manual")!;
     expect(composerDropdown.props("options")?.[0]?.key).toBe("skill:project-verify");
-    expect(composerDropdown.props("options")?.[0]?.label).toBe("project-verify");
+    const skillLabel = composerDropdown.props("options")?.[0]?.label as () => ReturnType<typeof h>;
+    expect(mount(defineComponent({ setup: () => () => skillLabel() })).text()).toBe("project-verify验证项目");
     expect(composerDropdown.props("scrollable")).toBe(true);
     expect(composerDropdown.props("menuProps")?.(undefined, [])).toMatchObject({
       class: "composer-options-menu",
@@ -405,6 +420,31 @@ describe("PaneView compact workbench interactions", () => {
     expect(value.draft).toBe("@project-verify ");
     await wrapper.get('button[aria-label="添加附件"]').trigger("click");
     expect(wrapper.emitted("chooseAttachments")).toHaveLength(1);
+  });
+
+  it("keeps typed tokens when dismissing suggestions and exposes file and directory actions", async () => {
+    const searchFiles = vi.fn().mockResolvedValue([]);
+    const { value, wrapper } = mountPane(reactive(pane()), [], searchFiles);
+    const textarea = wrapper.get("textarea");
+    await textarea.setValue("请使用 @missing");
+    expect(wrapper.getComponent(NDropdown).props("show")).toBe(true);
+    await textarea.trigger("keydown", { key: "Escape" });
+    expect(value.draft).toBe("请使用 @missing");
+    expect(wrapper.getComponent(NDropdown).props("show")).toBe(false);
+
+    await wrapper.get('button[aria-label="引用工作区文件"]').trigger("click");
+    expect(value.draft).toContain("$");
+    await wrapper.get('button[aria-label="切换当前工作目录"]').trigger("click");
+    expect(wrapper.emitted("chooseDirectory")).toHaveLength(1);
+  });
+
+  it("explains why an image attachment cannot be sent with the selected model", async () => {
+    const value = reactive(pane());
+    value.attachments = [{ id: "image-1", name: "screen.png", url: "codex-media://media/image-1", size: 12, kind: "local", sourcePath: "E:\\screen.png" }];
+    const { wrapper } = mountPane(value);
+    await wrapper.setProps({ models: [{ ...models[0]!, inputModalities: ["text"] }] });
+    expect(wrapper.get(".composer-warning").text()).toContain("当前模型不支持图片");
+    expect(wrapper.findAll("button").find((button) => button.text() === "发送")!.attributes("disabled")).toBeDefined();
   });
 
   it("leaves pasted text in the composer and routes pasted files through attachments", async () => {
