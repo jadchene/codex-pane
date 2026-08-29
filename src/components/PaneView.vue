@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, h, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { NAlert, NButton, NDropdown, NIcon, NInput, NSelect, NTag, NText, NTooltip } from "naive-ui";
-import { AddOutline, AttachOutline, DocumentTextOutline, LinkOutline, PauseOutline, SendOutline } from "@vicons/ionicons5";
+import { AddOutline, ArrowDownOutline, AttachOutline, DocumentTextOutline, LinkOutline, PauseOutline, SendOutline } from "@vicons/ionicons5";
 import type { ItemAction, PaneState, PendingServerRequest, UiItem } from "../types";
 import ApprovalCenter from "./ApprovalCenter.vue";
 import ItemCard from "./ItemCard.vue";
@@ -101,7 +101,7 @@ const composerMenuVisible = computed(() => composerMenuMode.value === "slash"
 const effectiveCwd = computed(() => props.pane.cwd || props.defaultCwd || "未设置工作目录");
 const contextLabel = computed(() => {
   const remaining = props.pane.contextRemainingPercent;
-  return `上下文 ${typeof remaining === "number" ? 100 - Math.min(100, Math.max(0, remaining)) : 0}%`;
+  return `上下文已用 ${typeof remaining === "number" ? 100 - Math.min(100, Math.max(0, remaining)) : 0}%`;
 });
 const permissionModeLabel = computed(() => {
   const reviewer = props.pane.approvalsReviewer ?? props.approvalReviewer ?? "";
@@ -414,11 +414,15 @@ defineExpose({ focusComposer });
       </NTag>
     </header>
 
-    <VirtualList ref="output" class="pane-output" :items="pane.items" :item-key="itemKey" :estimate-size="estimateItemSize" :min-item-size="56" :buffer="240" :follow-tail="pane.followTail" @scroll="handleOutputScroll">
+    <VirtualList ref="output" class="pane-output" :items="pane.items" :item-key="itemKey" :estimate-size="estimateItemSize" :min-item-size="56" :buffer="240" :follow-tail="pane.followTail" role="log" aria-live="polite" aria-relevant="additions" @scroll="handleOutputScroll">
       <template #before><div v-if="pane.historyLoading" class="history-loading">正在加载更早内容…</div></template>
       <template #default="{ item }"><div class="conversation-item"><ItemCard :item="item" :unwrap-power-shell="unwrapPowerShellCommands" :command-shell-path="commandShellPath" :mcp-gateway-adaptation="mcpGatewayAdaptation" @action="emit('itemAction', $event)" /></div></template>
       <template #empty><div class="empty-conversation"><NText depth="3">输入消息开始会话</NText></div></template>
     </VirtualList>
+    <NButton v-if="!pane.followTail && pane.items.length" class="scroll-to-bottom" size="small" secondary round aria-label="回到最新消息" @click="forceScrollToBottom">
+      <template #icon><NIcon :component="ArrowDownOutline" /></template>
+      回到最新
+    </NButton>
 
     <NAlert v-if="pane.error" type="error" closable class="pane-error" @close="pane.error = null">{{ pane.error }}</NAlert>
 
@@ -447,7 +451,7 @@ defineExpose({ focusComposer });
       </div>
 
       <NDropdown trigger="manual" placement="top-start" scrollable :show="composerMenuVisible" :options="composerDropdownOptions" :menu-props="composerMenuProps" @select="selectComposerOption">
-        <NInput ref="composer" v-model:value="pane.draft" type="textarea" :autosize="{ minRows: 2, maxRows: 8 }" :input-props="noSpellcheckInputProps" placeholder="发送消息；输入 / 查看命令，@ 使用 Skill，$ 引用文件" @click="syncComposerCaret" @keyup="syncComposerCaret" @select="syncComposerCaret" @keydown="handleKeydown" @paste="handlePaste" />
+        <NInput ref="composer" v-model:value="pane.draft" type="textarea" :maxlength="200000" :autosize="{ minRows: 2, maxRows: 8 }" :input-props="{ ...noSpellcheckInputProps, 'aria-label': '消息输入框' }" placeholder="发送消息；输入 / 查看命令，@ 使用 Skill，$ 引用文件" @click="syncComposerCaret" @keyup="syncComposerCaret" @select="syncComposerCaret" @keydown="handleKeydown" @paste="handlePaste" />
       </NDropdown>
 
       <div class="composer-actions">
@@ -460,11 +464,11 @@ defineExpose({ focusComposer });
         <div class="composer-selects">
           <div class="content-fit-select model-select-fit">
             <span class="select-width-sizer" aria-hidden="true"><span v-for="label in modelSelectLabels" :key="label">{{ label }}</span></span>
-            <NSelect v-model:value="pane.model" class="compact-select model-select" size="tiny" :options="models" placeholder="模型" :consistent-menu-width="false" :menu-props="{ class: 'content-fit-select-menu' }" @mousedown.stop @click.stop />
+            <NSelect v-model:value="pane.model" class="compact-select model-select" size="tiny" :options="models" placeholder="模型" aria-label="选择模型" :consistent-menu-width="false" :menu-props="{ class: 'content-fit-select-menu' }" @mousedown.stop @click.stop />
           </div>
           <div class="content-fit-select effort-select-fit">
             <span class="select-width-sizer" aria-hidden="true"><span v-for="label in effortSelectLabels" :key="label">{{ label }}</span></span>
-            <NSelect v-model:value="pane.effort" class="compact-select effort-select" size="tiny" :options="effortOptions" placeholder="推理" :consistent-menu-width="false" :menu-props="{ class: 'content-fit-select-menu' }" @mousedown.stop @click.stop />
+            <NSelect v-model:value="pane.effort" class="compact-select effort-select" size="tiny" :options="effortOptions" placeholder="推理" aria-label="选择推理强度" :consistent-menu-width="false" :menu-props="{ class: 'content-fit-select-menu' }" @mousedown.stop @click.stop />
           </div>
         </div>
         <div class="composer-submit">

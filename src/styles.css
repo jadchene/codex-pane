@@ -51,7 +51,8 @@ body :is(.n-dropdown-menu, .n-base-select-menu) { border: 1px solid var(--app-co
 .working-dots { display: inline-block; width: 14px; animation: working-pulse 1s steps(3, end) infinite; clip-path: inset(0 100% 0 0); vertical-align: bottom; }
 @keyframes working-pulse { 0% { clip-path: inset(0 100% 0 0); opacity: .35; } 100% { clip-path: inset(0 0 0 0); opacity: 1; } }
 
-.pane-output { min-height: 0; overflow: auto; overflow-anchor: none; padding: 12px clamp(10px, 2.2vw, 28px); }
+.pane-output { min-height: 0; overflow: auto; overflow-anchor: none; padding: 16px clamp(12px, 2.4vw, 32px); scroll-padding-bottom: 52px; }
+.scroll-to-bottom { position: absolute; z-index: 6; right: 18px; bottom: 126px; border-color: var(--app-control-border, #4a4a4a) !important; background: color-mix(in srgb, var(--app-surface, #111) 92%, transparent) !important; box-shadow: 0 8px 24px rgb(0 0 0 / 28%); backdrop-filter: blur(10px); }
 .conversation-item { display: flex; flex-direction: column; min-width: 0; padding-bottom: 6px; }
 .history-loading { padding: 8px; color: var(--app-muted, #8c8c8c); text-align: center; }
 .empty-conversation { display: grid; min-height: 100%; place-items: center; }
@@ -152,6 +153,8 @@ body .composer-option-usage { padding: 1px 5px; border-radius: 4px; color: var(-
 .session-item { min-width: 0; margin-bottom: 8px; border: 1px solid var(--app-border, #ddd) !important; border-radius: 9px; background: var(--app-surface, #fff); }
 .session-item:hover { border-color: color-mix(in srgb, var(--app-accent, #10a37f) 55%, var(--app-border, #ddd)) !important; background: var(--app-raised, #f6f6f6); }
 .session-item-active { border-color: var(--app-accent, #10a37f) !important; background: color-mix(in srgb, var(--app-accent, #10a37f) 12%, var(--app-surface, #fff)); }
+.session-item-button { display: block; width: 100%; padding: 0; border: 0; color: inherit; background: transparent; text-align: inherit; }
+.session-item-button:focus-visible { outline: 2px solid var(--app-accent, #10a37f); outline-offset: 4px; border-radius: 4px; }
 .session-item-body { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
 .session-title-row { display: flex; min-width: 0; align-items: center; gap: 6px; }
 .session-working-icon { width: 15px; height: 15px; flex: 0 0 15px; color: var(--app-accent, #10a37f); animation: session-working-spin .9s linear infinite; }

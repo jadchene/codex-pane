@@ -79,7 +79,7 @@ watch(() => props.show, (show) => { if (show) void loadSystemFonts(); }, { immed
         <div class="settings-section-heading"><NText strong>外观</NText><NText depth="3">更改会立即应用到整个窗口。</NText></div>
         <NForm label-placement="left" label-width="148" class="settings-form">
           <NFormItem label="主题">
-            <NRadioGroup v-model:value="theme" name="appearance-theme"><NRadioButton value="dark">纯黑</NRadioButton><NRadioButton value="light">纯白</NRadioButton></NRadioGroup>
+            <NRadioGroup v-model:value="theme" name="appearance-theme"><NRadioButton value="dark">深色</NRadioButton><NRadioButton value="light">浅色</NRadioButton></NRadioGroup>
           </NFormItem>
           <NFormItem label="界面字体">
             <div class="font-field">

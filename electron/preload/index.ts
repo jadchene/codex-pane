@@ -19,7 +19,7 @@ const api = {
   setFullScreen: (fullScreen: boolean): Promise<void> => ipcRenderer.invoke("window:fullscreen", fullScreen),
   windowControl: (action: "minimize" | "maximize" | "close"): Promise<void> => ipcRenderer.invoke("window:control", action),
   isMaximized: (): Promise<boolean> => ipcRenderer.invoke("window:is-maximized"),
-  openExternal: (url: string, direct = false): Promise<void> => ipcRenderer.invoke("external:open", url, direct),
+  openExternal: (url: string): Promise<void> => ipcRenderer.invoke("external:open", url),
   listSystemFonts: (): Promise<string[]> => ipcRenderer.invoke("system:fonts"),
   readDiagnostics: (): Promise<string[]> => ipcRenderer.invoke("diagnostics:read"),
   onConnectionState: (listener: (state: ConnectionState) => void): (() => void) => {

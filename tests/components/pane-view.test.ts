@@ -125,9 +125,14 @@ describe("PaneView compact workbench interactions", () => {
     expect(wrapper.find(".pane-title").exists()).toBe(false);
   });
 
-  it("does not show a jump-to-latest action and omits the session id", () => {
-    const { wrapper } = mountPane();
-    expect(wrapper.text()).not.toContain("跳到最新内容");
+  it("shows a discoverable return-to-latest action only when reading older content and omits the session id", async () => {
+    const value = reactive(pane());
+    value.items.push({ id: "message-1", turnId: "turn-1", type: "agentMessage", data: {}, streamText: "较早内容", status: "completed" });
+    const { wrapper } = mountPane(value);
+    expect(wrapper.get('button[aria-label="回到最新消息"]').text()).toContain("回到最新");
+    value.followTail = true;
+    await nextTick();
+    expect(wrapper.find('button[aria-label="回到最新消息"]').exists()).toBe(false);
     expect(wrapper.text()).not.toContain("thread-secret");
     expect(wrapper.text()).not.toContain("会话 thread");
   });
@@ -242,7 +247,7 @@ describe("PaneView compact workbench interactions", () => {
     await nextTick();
     const labels = (wrapper.getComponent(NDropdown).props("options") ?? []).map((option) => String(option.key));
     expect(labels).toEqual(["slash:agents", "slash:cd", "slash:compact", "slash:fast", "slash:goal", "slash:mcp", "slash:new", "slash:permissions", "slash:plan", "slash:ps", "slash:rename", "slash:resume", "slash:review", "slash:skills", "slash:status", "slash:stop"]);
-    expect(wrapper.get(".status-line").text()).toContain("上下文 38%");
+    expect(wrapper.get(".status-line").text()).toContain("上下文已用 38%");
   });
 
   it("shows command-only rows and non-duplicated hints for the selected slash command", async () => {

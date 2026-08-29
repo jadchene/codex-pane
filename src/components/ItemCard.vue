@@ -36,12 +36,19 @@ const redactText = (value: string): string => value
   .replace(/https?:\/\/[^\s<>"')\]]+/gi, (url) => redactUrl(url))
   .replace(/Bearer\s+[A-Za-z0-9._~+\/-]+=*/gi, "Bearer [已隐藏]")
   .replace(/sk-[A-Za-z0-9_-]{12,}/g, "sk-[已隐藏]")
-  .replace(/(access[_-]?token|authorization|api[_-]?key|password|secret)(\s*[:=]\s*)\S+/gi, "$1$2[已隐藏]");
-const redactValue = (value: unknown, key = ""): unknown => {
+  .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, "[JWT 已隐藏]")
+  .replace(/(access[_-]?token|refresh[_-]?token|authorization|api[_-]?key|password|secret)(\s*[:=]\s*)\S+/gi, "$1$2[已隐藏]");
+const redactValue = (value: unknown, key = "", depth = 0, budget = { nodes: 2_000 }): unknown => {
+  if (budget.nodes-- <= 0) return "… 已省略其余内容";
   if (/(token|authorization|api.?key|password|secret)/i.test(key)) return "[已隐藏]";
   if (typeof value === "string") return redactText(value);
-  if (Array.isArray(value)) return value.map((entry) => redactValue(entry));
-  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([entryKey, entry]) => [entryKey, redactValue(entry, entryKey)]));
+  if (depth >= 8 && value && typeof value === "object") return "… 层级过深，已省略";
+  if (Array.isArray(value)) {
+    const visible = value.slice(0, 100).map((entry) => redactValue(entry, "", depth + 1, budget));
+    if (visible.length < value.length) visible.push(`… 已省略 ${value.length - visible.length} 项`);
+    return visible;
+  }
+  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value as Record<string, unknown>).slice(0, 100).map(([entryKey, entry]) => [entryKey, redactValue(entry, entryKey, depth + 1, budget)]));
   return value;
 };
 const textValue = (value: unknown): string => {

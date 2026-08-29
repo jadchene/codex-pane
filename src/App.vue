@@ -37,6 +37,13 @@ const layoutOptions = Object.entries(layoutLabels).map(([key, label]) => ({ key,
 const activeTheme = computed(() => store.state.appearance.theme === "dark" ? darkTheme : null);
 const themeOverrides = computed(() => appearanceThemeOverrides(store.state.appearance));
 const appearanceStyle = computed(() => appearanceCssVars(store.state.appearance));
+const connectionStatus = computed(() => {
+  const phase = store.state.connection.phase;
+  if (phase === "ready") return { label: "已连接", tone: "ready" };
+  if (phase === "starting" || phase === "restarting") return { label: "连接中", tone: "working" };
+  if (phase === "error") return { label: "连接异常", tone: "error" };
+  return { label: "未连接", tone: "idle" };
+});
 
 const layoutPaneCounts: Record<LayoutKind, number> = { single: 1, vertical: 2, horizontal: 2, quad: 4, fourColumns: 4, fourRows: 4, six: 6 };
 const pendingLayout = ref<LayoutKind | null>(null);
@@ -201,7 +208,7 @@ onUnmounted(() => {
         <div class="app-root" :class="{ 'app-root-fullscreen': fullScreen }" :style="appearanceStyle">
           <NLayout class="app-shell">
             <NLayoutHeader v-if="!fullScreen" class="topbar custom-titlebar" bordered>
-              <div class="titlebar-identity"><img :src="appIconUrl" alt="" /><span>Codex Pane</span></div>
+              <div class="titlebar-identity"><img :src="appIconUrl" alt="" /><span>Codex Pane</span><span class="titlebar-status" :class="`titlebar-status-${connectionStatus.tone}`" role="status"><i />{{ connectionStatus.label }}</span></div>
               <div class="titlebar-drag-region" aria-hidden="true" />
               <div class="titlebar-actions">
                 <NTooltip><template #trigger><NButton quaternary circle size="small" aria-label="设置" @click="settingsOpen = true"><template #icon><NIcon :component="SettingsOutline" /></template></NButton></template>设置</NTooltip>
@@ -219,7 +226,7 @@ onUnmounted(() => {
             </NLayoutHeader>
 
             <NAlert v-if="store.state.connection.phase === 'error'" type="error" class="connection-alert" :title="store.state.connection.message">
-              请确认终端中可以运行 codex --version，然后使用标题栏的重新连接按钮。
+              <div class="connection-alert-content"><span>请确认终端中可以运行 codex --version。</span><NButton size="small" type="error" secondary @click="store.reconnect">重新连接</NButton></div>
             </NAlert>
             <NAlert v-else-if="store.state.notices.length" type="warning" class="connection-alert" closable @close="store.dismissNotice">{{ store.state.notices.at(-1) }}</NAlert>
 
@@ -269,6 +276,13 @@ onUnmounted(() => {
 .custom-titlebar { position: relative; display: flex; box-sizing: border-box; align-items: center; justify-content: flex-end; height: 42px; padding: 0; user-select: none; -webkit-app-region: drag; }
 .titlebar-identity { display: flex; min-width: 0; align-items: center; gap: 8px; padding-left: 10px; color: var(--app-text); font-size: .86em; font-weight: 600; }
 .titlebar-identity img { width: 18px; height: 18px; }
+.titlebar-status { display: inline-flex; align-items: center; gap: 5px; margin-left: 4px; color: var(--app-muted); font-size: .86em; font-weight: 500; }
+.titlebar-status i { width: 7px; height: 7px; border-radius: 50%; background: var(--app-muted); }
+.titlebar-status-ready i { background: #35c98b; box-shadow: 0 0 0 3px color-mix(in srgb, #35c98b 15%, transparent); }
+.titlebar-status-working i { background: #e4a853; animation: connection-pulse 1.2s ease-in-out infinite; }
+.titlebar-status-error i { background: #e05b64; }
+@keyframes connection-pulse { 50% { opacity: .35; } }
+.connection-alert-content { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .titlebar-drag-region { min-width: 24px; flex: 1 1 auto; align-self: stretch; }
 .titlebar-actions, .window-controls { position: relative; z-index: 1; display: flex; align-items: center; height: 100%; -webkit-app-region: no-drag; }
 .titlebar-actions { gap: 2px; padding-right: 8px; }
@@ -290,6 +304,7 @@ onUnmounted(() => {
 .layout-pane-copy strong, .layout-pane-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .layout-pane-copy small { color: var(--app-muted); }
 @media (max-width: 760px) {
+  .titlebar-status { display: none; }
   .titlebar-actions .n-button__content { font-size: 0; }
   .window-control { width: 40px; }
 }

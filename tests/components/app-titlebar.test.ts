@@ -45,7 +45,7 @@ describe("App titlebar", () => {
     expect(initialize).toHaveBeenCalledOnce();
     const titlebar = wrapper.get(".custom-titlebar");
     expect(titlebar.text()).toContain("Codex Pane");
-    expect(titlebar.text()).not.toContain("已连接");
+    expect(titlebar.text()).toContain("已连接");
     expect(titlebar.text()).not.toContain("API 模式");
     const layoutButton = titlebar.get('button[aria-label="切换窗格布局，当前单窗格"]');
     expect(layoutButton.text()).toBe("");

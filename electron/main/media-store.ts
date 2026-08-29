@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, readdir, stat, unlink, writeFile } from "node:fs/promises";
-import { basename, extname, join, resolve } from "node:path";
+import { mkdir, readFile, readdir, stat, unlink, utimes, writeFile } from "node:fs/promises";
+import { basename, dirname, extname, join, resolve } from "node:path";
 import { clipboard, nativeImage } from "electron";
 import type { MediaAttachment } from "../shared/contracts.js";
 import { stableManagedId } from "./managed-id.js";
@@ -29,7 +29,7 @@ export class MediaStore {
     for (const entry of entries) {
       if (!entry.isFile() || !/^[0-9a-f-]{36}\.png$/i.test(entry.name)) continue;
       const path = resolve(this.#directory, entry.name);
-      if (!path.startsWith(`${this.#directory}\\`)) continue;
+      if (dirname(path) !== this.#directory) continue;
       const metadata = await stat(path);
       if (metadata.mtimeMs < Date.now() - MEDIA_RETENTION_MS) {
         await unlink(path);
@@ -72,7 +72,11 @@ export class MediaStore {
     const existingPath = this.resolveAttachment(id);
     try {
       const existing = await stat(existingPath);
-      if (existing.isFile()) return { id, name: basename(normalizedPath, extname(normalizedPath)) + ".png", url: `codex-media://media/${id}`, size: existing.size, kind: "local", sourcePath: existingPath };
+      if (existing.isFile()) {
+        const now = new Date();
+        await utimes(existingPath, now, now);
+        return { id, name: basename(normalizedPath, extname(normalizedPath)) + ".png", url: `codex-media://media/${id}`, size: existing.size, kind: "local", sourcePath: existingPath };
+      }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
@@ -89,7 +93,7 @@ export class MediaStore {
       throw new Error("图片引用无效。" );
     }
     const path = resolve(this.#directory, `${id}.png`);
-    if (!path.startsWith(`${this.#directory}\\`) && path !== join(this.#directory, `${id}.png`)) {
+    if (dirname(path) !== this.#directory) {
       throw new Error("图片路径不在应用管理目录中。" );
     }
     return path;

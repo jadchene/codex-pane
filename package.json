@@ -57,6 +57,14 @@
     "appId": "com.jadchene.codexpane",
     "productName": "Codex Pane",
     "asar": true,
+    "electronFuses": {
+      "runAsNode": false,
+      "enableCookieEncryption": true,
+      "enableNodeOptionsEnvironmentVariable": false,
+      "enableNodeCliInspectArguments": false,
+      "enableEmbeddedAsarIntegrityValidation": true,
+      "onlyLoadAppFromAsar": true
+    },
     "directories": {
       "output": "release"
     },

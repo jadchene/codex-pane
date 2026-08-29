@@ -73,9 +73,15 @@ defineExpose({ focusSearch });
             :key="thread.id"
             class="session-item"
             :class="{ 'session-item-active': thread.id === activeThreadId }"
-            @click="emit('resume', thread.id)"
           >
-            <div class="session-item-body">
+            <button
+              type="button"
+              class="session-item-button"
+              :aria-current="thread.id === activeThreadId ? 'true' : undefined"
+              :aria-label="`${thread.name || thread.preview.slice(0, 80) || '未命名会话'}，${thread.cwd || '未设置工作目录'}`"
+              @click="emit('resume', thread.id)"
+            >
+              <div class="session-item-body">
               <div class="session-title-row">
                 <NIcon v-if="workingThreadIds.includes(thread.id)" :component="SyncOutline" class="session-working-icon" aria-label="正在工作" />
                 <span
@@ -91,7 +97,8 @@ defineExpose({ focusSearch });
                 <span class="session-meta-dot">·</span>
                 <NTime class="session-time" :time="thread.updatedAt * 1000" type="relative" />
               </div>
-            </div>
+              </div>
+            </button>
             <template v-if="showResumeButton" #suffix><NButton size="small" secondary class="session-resume-button" @click.stop="emit('resume', thread.id)">恢复</NButton></template>
           </NListItem>
         </NList>

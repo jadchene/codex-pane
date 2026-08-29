@@ -1,5 +1,6 @@
 import { appendFile, mkdir, readFile, readdir, rename, stat, unlink } from "node:fs/promises";
-import { basename, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
+import { redactSensitiveText } from "./sensitive-data.js";
 
 const MAX_LOG_BYTES = 5 * 1024 * 1024;
 const RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
@@ -61,29 +62,14 @@ export class DiagnosticLog {
   #safePath(name: string): string {
     if (basename(name) !== name) throw new Error("日志文件名无效。" );
     const path = resolve(this.#directory, name);
-    if (!path.startsWith(`${this.#directory}\\`)) throw new Error("日志路径无效。" );
+    if (dirname(path) !== this.#directory) throw new Error("日志路径无效。" );
     return path;
   }
 
   #redact(value: unknown, key = ""): unknown {
     if (/(token|authorization|api.?key|password|secret)/i.test(key)) return "[已隐藏]";
     if (typeof value === "string") {
-      let text = value
-        .replace(/sk-[A-Za-z0-9_-]{12,}/g, "sk-[已隐藏]")
-        .replace(/(access[_-]?token|authorization|api[_-]?key|password|secret)(\s*[:=]\s*)\S+/gi, "$1$2[已隐藏]")
-        .replace(/Bearer\s+[A-Za-z0-9._~-]+/gi, "Bearer [已隐藏]")
-        .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, "[JWT 已隐藏]")
-        .replace(/https?:\/\/[^\s"'<>]+/gi, (rawUrl) => {
-          try {
-            const url = new URL(rawUrl);
-            for (const key of [...url.searchParams.keys()]) url.searchParams.set(key, "[已隐藏]");
-            return url.toString();
-          } catch {
-            return rawUrl;
-          }
-        });
-      if (process.env.USERPROFILE) text = text.replaceAll(process.env.USERPROFILE, "%USERPROFILE%");
-      return text.slice(0, 20_000);
+      return redactSensitiveText(value, true).slice(0, 20_000);
     }
     if (Array.isArray(value)) return value.slice(0, 100).map((entry) => this.#redact(entry));
     if (value && typeof value === "object") return Object.fromEntries(Object.entries(value as Record<string, unknown>).slice(0, 100).map(([entryKey, entry]) => [entryKey, this.#redact(entry, entryKey)]));

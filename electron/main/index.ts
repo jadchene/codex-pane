@@ -266,6 +266,8 @@ const createWindow = async (): Promise<void> => {
       nodeIntegration: false,
       sandbox: true,
       webSecurity: true,
+      webviewTag: false,
+      navigateOnDragDrop: false,
       allowRunningInsecureContent: false
     }
   });
@@ -321,6 +323,9 @@ const createWindow = async (): Promise<void> => {
   });
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     return { action: "deny" };
+  });
+  mainWindow.webContents.on("will-attach-webview", (event) => {
+    event.preventDefault();
   });
   mainWindow.webContents.on("will-navigate", (event, url) => {
     if (!isTrustedLocalPage(url)) event.preventDefault();
@@ -466,7 +471,7 @@ const registerIpc = (): void => {
     if (typeof rawValue !== "string" || rawValue.length > 2_000_000) throw new Error("复制内容无效。");
     await clipboard.writeText(rawValue);
   });
-  ipcMain.handle("external:open", async (event, rawUrl: unknown, rawDirect: unknown) => {
+  ipcMain.handle("external:open", async (event, rawUrl: unknown) => {
     assertTrustedSender(event);
     if (typeof rawUrl !== "string" || rawUrl.length > 8_192) {
       throw new Error("链接无效。" );
@@ -474,10 +479,6 @@ const registerIpc = (): void => {
     const url = new URL(rawUrl);
     if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) {
       throw new Error("只允许打开 HTTP 或 HTTPS 链接。" );
-    }
-    if (rawDirect === true) {
-      await shell.openExternal(url.toString());
-      return;
     }
     const confirmation = await dialog.showMessageBox(mainWindow!, {
       type: "question",

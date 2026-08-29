@@ -27,7 +27,7 @@ const handleClick = (event: MouseEvent): void => {
       dialog.warning({ title: "无法打开链接", content: "Codex Pane 只允许通过系统浏览器打开 HTTP 或 HTTPS 链接。", positiveText: "知道了" });
       return;
     }
-    void window.codexPane.openExternal(url.toString(), props.ctrlClickLinks);
+    void window.codexPane.openExternal(url.toString());
   } catch {
     dialog.warning({ title: "无法打开链接", content: "这个链接格式无效。", positiveText: "知道了" });
   }

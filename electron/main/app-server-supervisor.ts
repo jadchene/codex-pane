@@ -5,6 +5,7 @@ import { JsonLineParser, RuntimeProtocolValidator, isResponse, isServerRequest, 
 import { BASELINE, UNREGISTERED_CAPABILITY_REQUEST_METHODS } from "../../packages/protocol/src/method-manifest.js";
 import type { ConnectionState, ProtocolEvent } from "../shared/contracts.js";
 import { forceTerminateProcessTree, spawnCodex } from "./codex-process.js";
+import { redactSensitiveText } from "./sensitive-data.js";
 
 type PendingCall = {
   generation: number;
@@ -476,9 +477,7 @@ export class AppServerSupervisor extends EventEmitter {
   }
 
   #redact(text: string): string {
-    return text
-      .replace(/sk-[A-Za-z0-9_-]{12,}/g, "sk-[已隐藏]")
-      .replace(/(access[_-]?token|authorization|api[_-]?key)(\s*[:=]\s*)\S+/gi, "$1$2[已隐藏]");
+    return redactSensitiveText(text);
   }
 
   #scheduleRestart(detail: string): void {

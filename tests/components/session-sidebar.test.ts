@@ -36,7 +36,10 @@ describe("SessionSidebar", () => {
     await wrapper.vm.$nextTick();
     expect(wrapper.find(".session-working-icon").exists()).toBe(false);
     expect(wrapper.find(".session-unread-dot").attributes("aria-label")).toBe("有未读内容");
-    wrapper.getComponent(SessionListPanel).vm.$emit("resume", "thread-b");
+    const sessionButton = wrapper.findAll(".session-item-button").find((button) => button.attributes("aria-label")?.startsWith("会话 B"));
+    expect(sessionButton?.attributes("aria-current")).toBeUndefined();
+    await sessionButton!.trigger("keydown", { key: "Enter" });
+    await sessionButton!.trigger("click");
     await vi.waitFor(() => expect(wrapper.emitted("activatePane")?.at(-1)).toEqual(["pane-2"]));
     await wrapper.setProps({ pane: store.state.panes[1]! });
     expect(store.state.focusedPaneId).toBe("pane-2");

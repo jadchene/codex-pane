@@ -2,8 +2,8 @@ import type { CSSProperties } from "vue";
 import type { GlobalThemeOverrides } from "naive-ui";
 import type { AppearanceSettings } from "./types";
 
-const darkPalette = { background: "#000000", surface: "#050505", raised: "#0b0b0b", border: "#242424", controlBorder: "#4a4a4a", text: "#ffffff", muted: "#a3a3a3", diffAdd: "#213a2b", diffDelete: "#4a221d", diffAddGutter: "#213a2b", diffDeleteGutter: "#4a221d", diffGutterText: "#8b949e", diffAddText: "#3fb950", diffDeleteText: "#f85149" };
-const lightPalette = { background: "#ffffff", surface: "#ffffff", raised: "#f6f6f6", border: "#d9d9d9", controlBorder: "#a8a8a8", text: "#111111", muted: "#666666", diffAdd: "#dafbe1", diffDelete: "#ffebe9", diffAddGutter: "#aceebb", diffDeleteGutter: "#ffcecb", diffGutterText: "#1f2328", diffAddText: "#116329", diffDeleteText: "#82071e" };
+const darkPalette = { background: "#0c0d0f", surface: "#111316", raised: "#191c20", border: "#292d33", controlBorder: "#454b54", text: "#f3f5f7", muted: "#9da5af", diffAdd: "#183627", diffDelete: "#42201f", diffAddGutter: "#214832", diffDeleteGutter: "#542725", diffGutterText: "#9aa4ae", diffAddText: "#55c985", diffDeleteText: "#ff716a" };
+const lightPalette = { background: "#f3f5f7", surface: "#ffffff", raised: "#f7f8fa", border: "#d9dee5", controlBorder: "#a9b1bb", text: "#171a1f", muted: "#626b76", diffAdd: "#dafbe1", diffDelete: "#ffebe9", diffAddGutter: "#aceebb", diffDeleteGutter: "#ffcecb", diffGutterText: "#1f2328", diffAddText: "#116329", diffDeleteText: "#82071e" };
 const defaultFontFamily = '"Segoe UI", "Microsoft YaHei UI", sans-serif';
 
 export const appearanceCssVars = (appearance: AppearanceSettings): CSSProperties => {

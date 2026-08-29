@@ -18,7 +18,7 @@ describe("MarkdownContent links", () => {
     await wrapper.get("a").trigger("click");
     expect(openExternal).not.toHaveBeenCalled();
     await wrapper.get("a").trigger("click", { ctrlKey: true });
-    expect(openExternal).toHaveBeenCalledWith("https://example.com/result", true);
+    expect(openExternal).toHaveBeenCalledWith("https://example.com/result");
   });
 
   it("allows Ctrl+click for HTTP links", async () => {
@@ -29,6 +29,6 @@ describe("MarkdownContent links", () => {
     });
 
     await wrapper.get("a").trigger("click", { ctrlKey: true });
-    expect(openExternal).toHaveBeenCalledWith("http://localhost:3000/status", true);
+    expect(openExternal).toHaveBeenCalledWith("http://localhost:3000/status");
   });
 });
