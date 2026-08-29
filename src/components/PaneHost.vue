@@ -47,6 +47,7 @@ defineExpose({ focusComposer });
     :pending-requests="paneRequests"
     :approval-resolving="approvalResolving"
     :rate-limit-labels="store.state.rateLimitLabels"
+    :pane-number="index + 1"
     :show-title="store.state.workspaceMode !== 'sessionSidebar'"
     :approval-reviewer="store.state.effectiveConfig?.approvalReviewer"
     :approval-policy="store.state.effectiveConfig?.approvalPolicy"

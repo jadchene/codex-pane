@@ -52,6 +52,13 @@ describe("ItemCard compact structured views", () => {
     expect(wrapper.find(".tool-card").exists()).toBe(false);
   });
 
+  it("identifies unknown protocol item types instead of showing an ambiguous detail card", () => {
+    const wrapper = mount(ItemCard, { props: { item: item("futureToolEvent", { message: "可见详情" }) } });
+    expect(wrapper.text()).toContain("协议事件 · future Tool Event");
+    expect(wrapper.text()).toContain("可见详情");
+    expect(wrapper.text()).not.toContain("运行详情");
+  });
+
   it("renders status, MCP status, and skills as compact named fields", () => {
     const status = mount(ItemCard, { props: { item: item("status", { connection: "已连接", account: "API 模式", cwd: "E:\\Work" }) } });
     expect(status.text()).toContain("当前状态");
@@ -102,11 +109,11 @@ describe("ItemCard compact structured views", () => {
 
   it("shows command lifecycle and unwraps PowerShell display shells", () => {
     const command = mount(ItemCard, { props: { item: item("commandExecution", { id: "raw-id", command: "Get-ChildItem", cwd: "E:\\Work", exitCode: 0, aggregatedOutput: "ok", internalEnvelope: "must-not-render" }) } });
-    expect(command.text()).toContain("Ran command");
+    expect(command.text()).toContain("已运行命令");
     expect(command.text()).toContain("Get-ChildItem");
     expect(command.text()).not.toContain("must-not-render");
     const running = mount(ItemCard, { props: { item: item("commandExecution", { command: "pwsh.exe -NoProfile -Command \"Get-ChildItem\"", status: "inProgress" }, "", "running"), unwrapPowerShell: true } });
-    expect(running.text()).toContain("Running command");
+    expect(running.text()).toContain("正在运行命令");
     expect(running.text()).toContain("Get-ChildItem");
     expect(running.text()).not.toContain("pwsh.exe");
     const configured = mount(ItemCard, { props: { item: item("commandExecution", { command: '"D:\\Tools\\pwsh.exe" -Command "Get-Location"', status: "completed" }), unwrapPowerShell: true, commandShellPath: "D:\\Tools\\pwsh.exe" } });

@@ -45,6 +45,8 @@ body :is(.n-dropdown-menu, .n-base-select-menu) { border: 1px solid var(--app-co
 .pane-focused .pane-header { background: color-mix(in srgb, var(--app-accent, #10a37f) 8%, var(--app-surface, #000)); }
 .pane-header { display: flex; align-items: center; justify-content: space-between; min-width: 0; padding: 4px 10px; border-bottom: 1px solid var(--app-border, #242424); background: var(--app-surface, #000); }
 .pane-title-wrap { display: flex; min-width: 0; align-items: center; gap: 7px; }
+.pane-number { display: inline-grid; width: 18px; height: 18px; flex: 0 0 18px; place-items: center; border: 1px solid var(--app-control-border, #4a4a4a); border-radius: 5px; color: var(--app-muted, #888); font: 600 .75em/1 var(--app-font-family); }
+.pane-focused .pane-number { border-color: var(--app-accent, #10a37f); color: var(--app-accent, #10a37f); }
 .pane-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .88em; font-weight: 600; }
 .unread-dot { width: 6px; height: 6px; flex: 0 0 auto; border-radius: 50%; background: var(--app-accent, #10a37f); }
 .working-indicator { width: 6.1em; flex: 0 0 6.1em !important; overflow: visible !important; color: var(--app-accent, #10a37f); font-size: 1em; letter-spacing: .02em; }
@@ -101,13 +103,17 @@ body :is(.n-dropdown-menu, .n-base-select-menu) { border: 1px solid var(--app-co
 .cwd-button:hover { color: var(--app-text, #fff) !important; }
 .cwd-text { display: inline-block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .9em; }
 .composer-notice { display: flex; min-width: 0; justify-content: space-between; gap: 8px; color: var(--app-muted, #888); font-size: .82em; }
+.composer-menu-help { display: flex; min-width: 0; justify-content: space-between; flex-wrap: wrap; gap: 4px 12px; color: var(--app-muted, #888); font-size: .78em; }
+.composer-menu-help kbd { margin-inline: 1px; padding: 1px 4px; border: 1px solid var(--app-control-border, #4a4a4a); border-radius: 4px; color: var(--app-text, #fff); background: var(--app-raised, #0b0b0b); font: inherit; }
 .composer-warning { color: #e4a853; }
 .attachment-list { display: flex; gap: 5px; overflow-x: auto; }
 .attachment-chip { display: flex; max-width: min(420px, 82%); flex: 0 0 auto; align-items: center; gap: 5px; padding: 3px 4px; border: 1px solid var(--app-border, #242424); border-radius: 6px; background: var(--app-raised, #0b0b0b); }
 .attachment-chip img { width: 27px; height: 27px; border-radius: 3px; object-fit: cover; }
 .attachment-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .86em; }
 .status-line { display: flex; min-width: 0; align-items: center; flex-wrap: wrap; column-gap: 7px; row-gap: 3px; min-height: 29px; overflow: visible; padding-block: 2px; border-top: 1px solid var(--app-border, #242424); color: var(--app-muted, #888); font-size: .86em; background: var(--app-surface, #000); }
-.status-line > span { flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.status-line > span, .status-line > button { flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.status-action { padding: 0; border: 0; color: inherit; background: transparent; font: inherit; text-decoration: underline; text-decoration-color: transparent; text-underline-offset: 3px; }
+.status-action:hover, .status-action:focus-visible { color: var(--app-text, #fff); text-decoration-color: currentColor; }
 .inline-detail-fields { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 18px; margin-top: 6px; }
 .inline-detail-field { display: inline-flex; min-width: 0; align-items: baseline; }
 .inline-detail-field > :last-child { min-width: 0; overflow-wrap: anywhere; }
@@ -141,6 +147,8 @@ body .composer-rich-option span { color: var(--app-muted, #888); font-size: .9em
 .approval-option-button { width: 100%; height: auto; min-height: 38px; justify-content: flex-start; padding-block: 7px; }
 .approval-option-button .n-button__content { display: flex; align-items: flex-start; flex-direction: column; gap: 2px; text-align: left; white-space: normal; }
 .approval-option-description { color: var(--app-muted, #888); font-size: .92em; }
+.approval-risk-summary { display: grid; gap: 5px; padding: 8px 10px; border: 1px solid var(--app-border, #242424); border-radius: 6px; background: var(--app-surface, #050505); overflow-wrap: anywhere; }
+.approval-risk-summary strong { color: var(--app-text, #fff); }
 .auto-review-indicator { color: var(--app-accent, #10a37f); }
 .context-usage-warning { color: #e4a853; }
 .context-usage-critical { color: #e05b64; font-weight: 600; }

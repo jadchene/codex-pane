@@ -49,14 +49,35 @@ describe("ApprovalCenter request lifecycle UI", () => {
     ]);
   });
 
+  it("summarizes elevated command permissions without exposing secrets", () => {
+    const command = request(9, "item/commandExecution/requestApproval", "pane-1", {
+      command: "Invoke-WebRequest https://example.com",
+      networkApprovalContext: { protocol: "https", host: "example.com" },
+      additionalPermissions: { network: { enabled: true }, fileSystem: { read: ["E:\\Work"], write: ["E:\\Output"], entries: [] } },
+      commandActions: [{ type: "read", path: "E:\\Work\\config.json", command: "Get-Content", name: "config.json" }],
+      proposedExecpolicyAmendment: ["Invoke-WebRequest"],
+      apiKey: "sk-this-must-never-render"
+    });
+    const wrapper = mountCenter([command]);
+    expect(wrapper.text()).toContain("https://example.com");
+    expect(wrapper.text()).toContain("读取文件：E:\\Work\\config.json");
+    expect(wrapper.text()).toContain("附加写入：E:\\Output");
+    expect(wrapper.text()).not.toContain("sk-this-must-never-render");
+  });
+
   it("validates and submits a user-input answer", async () => {
     const userInput = request("question-1", "item/tool/requestUserInput", "pane-1", {
       questions: [{ id: "purpose", header: "用途", question: "请输入用途", isSecret: false }]
     });
     const wrapper = mountCenter([userInput]);
+    document.body.appendChild(wrapper.element);
     await clickButton(wrapper, "提交回答");
     expect(wrapper.text()).toContain("请回答用途");
     await wrapper.get("textarea").setValue("用于验收");
+    const textarea = wrapper.get("textarea").element;
+    textarea.focus();
+    await wrapper.get("textarea").trigger("keydown", { key: "ArrowLeft" });
+    expect(document.activeElement).toBe(textarea);
     await clickButton(wrapper, "提交回答");
     expect(wrapper.emitted("resolve")?.at(-1)).toEqual([userInput, { answers: { purpose: { answers: ["用于验收"] } } }]);
   });

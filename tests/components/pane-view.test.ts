@@ -466,6 +466,42 @@ describe("PaneView compact workbench interactions", () => {
     expect(wrapper.emitted("scrollState")?.at(-1)).toEqual([1400, true]);
   });
 
+  it("recalls submitted prompts from the composer with shell-style arrow history", async () => {
+    const { value, wrapper } = mountPane();
+    const textarea = wrapper.get("textarea");
+    await textarea.setValue("第一条任务");
+    await textarea.trigger("keydown", { key: "Enter" });
+    value.draft = "";
+    await nextTick();
+    await textarea.setValue("第二条任务");
+    await textarea.trigger("keydown", { key: "Enter" });
+    value.draft = "尚未发送的草稿";
+    await nextTick();
+    (textarea.element as HTMLTextAreaElement).setSelectionRange(0, 0);
+    await textarea.trigger("keydown", { key: "ArrowUp" });
+    expect(value.draft).toBe("第二条任务");
+    (textarea.element as HTMLTextAreaElement).setSelectionRange(0, 0);
+    await textarea.trigger("keydown", { key: "ArrowUp" });
+    expect(value.draft).toBe("第一条任务");
+    (textarea.element as HTMLTextAreaElement).setSelectionRange(value.draft.length, value.draft.length);
+    await textarea.trigger("keydown", { key: "ArrowDown" });
+    (textarea.element as HTMLTextAreaElement).setSelectionRange(value.draft.length, value.draft.length);
+    await textarea.trigger("keydown", { key: "ArrowDown" });
+    expect(value.draft).toBe("尚未发送的草稿");
+  });
+
+  it("searches Skill descriptions and explains keyboard menu controls", async () => {
+    const value = reactive(pane());
+    value.skills = [{ name: "project-verify", description: "检查发布质量", path: "E:\\Skills\\project-verify\\SKILL.md" }];
+    const { wrapper } = mountPane(value);
+    const textarea = wrapper.get("textarea");
+    await textarea.setValue("@发布");
+    await nextTick();
+    expect(wrapper.getComponent(NDropdown).props("options")?.[0]?.key).toBe("skill:project-verify");
+    expect(wrapper.get(".composer-menu-help").text()).toContain("Ctrl+P");
+    expect(wrapper.get(".composer-menu-help").text()).toContain("Shift+Tab");
+  });
+
   it("returns focus to the composer after the inline approval completes", async () => {
     const { wrapper } = mountPane(reactive(pane()), [request()]);
     const textarea = wrapper.get("textarea").element;

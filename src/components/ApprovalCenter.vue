@@ -47,6 +47,41 @@ const availableDecisions = computed(() => Array.isArray(params.value.availableDe
   : ["accept", "acceptForSession", "decline", "cancel"]);
 const choiceOnlyQuestions = computed(() => questions.value.length > 0 && questions.value.every((question) => Array.isArray(question.options) && question.options.length > 0 && !question.isOther));
 const singleChoiceElicitation = computed(() => params.value.mode === "form" && elicitationFields.value.length === 1 && elicitationFields.value[0]?.schema.type !== "array" && fieldOptions(elicitationFields.value[0]?.schema ?? {}).length > 0);
+const asRecord = (value: unknown): Record<string, unknown> => value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+const permissionProfile = computed(() => asRecord(params.value.permissions ?? params.value.additionalPermissions));
+const networkPermission = computed(() => asRecord(permissionProfile.value.network));
+const fileSystemPermission = computed(() => asRecord(permissionProfile.value.fileSystem));
+const filePermissionEntries = computed<Array<{ access: string; path: unknown }>>(() => {
+  const entries = Array.isArray(fileSystemPermission.value.entries) ? fileSystemPermission.value.entries : [];
+  const legacy = [
+    ...(Array.isArray(fileSystemPermission.value.read) ? fileSystemPermission.value.read.map((path) => ({ access: "读取", path })) : []),
+    ...(Array.isArray(fileSystemPermission.value.write) ? fileSystemPermission.value.write.map((path) => ({ access: "写入", path })) : [])
+  ];
+  return [...entries.map((entry) => {
+    const detail = asRecord(entry);
+    return { access: String(detail.access ?? "文件访问"), path: detail.path };
+  }), ...legacy];
+});
+const requestedFileChanges = computed(() => {
+  if (Array.isArray(params.value.fileChanges)) return params.value.fileChanges.map((change, index) => ({ path: String(asRecord(change).path ?? `文件 ${index + 1}`), change: asRecord(change) }));
+  return Object.entries(asRecord(params.value.fileChanges)).map(([path, change]) => ({ path, change: asRecord(change) }));
+});
+const requestedCommandActions = computed(() => Array.isArray(params.value.commandActions) ? params.value.commandActions.map(asRecord) : []);
+const commandActionLabel = (action: Record<string, unknown>): string => {
+  const kind = ({ read: "读取文件", listFiles: "列出文件", search: "搜索内容", unknown: "执行命令" } as Record<string, string>)[String(action.type)] ?? "执行命令";
+  return `${kind}：${String(action.path ?? action.query ?? action.name ?? action.command ?? "未提供详情")}`;
+};
+const fileChangeLabel = (change: Record<string, unknown>): string => ({ add: "新增", delete: "删除", update: "修改" }[String(change.type)] ?? "变更");
+const redactForDisplay = (value: unknown, key = "", depth = 0): unknown => {
+  if (/(token|authorization|api.?key|password|secret)/i.test(key)) return "[已隐藏]";
+  if (depth > 7 && value && typeof value === "object") return "…已省略";
+  if (Array.isArray(value)) return value.slice(0, 100).map((entry) => redactForDisplay(entry, "", depth + 1));
+  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value as Record<string, unknown>).slice(0, 100).map(([entryKey, entry]) => [entryKey, redactForDisplay(entry, entryKey, depth + 1)]));
+  if (typeof value === "string") return value.replace(/Bearer\s+\S+/gi, "Bearer [已隐藏]").replace(/sk-[A-Za-z0-9_-]{12,}/g, "sk-[已隐藏]");
+  return value;
+};
+const safeJson = (value: unknown): string => JSON.stringify(redactForDisplay(value), null, 2);
+const displayPath = (value: unknown): string => typeof value === "string" ? value : safeJson(value);
 
 const decisionLabel = (decision: unknown): string => {
   if (decision === "accept") return "允许一次";
@@ -162,6 +197,8 @@ const chooseElicitationOption = (field: { name: string }, value: string): void =
 
 const handleKeydown = (event: KeyboardEvent): void => {
   if (!root.value || !["ArrowDown", "ArrowUp", "ArrowRight", "ArrowLeft"].includes(event.key)) return;
+  const target = event.target instanceof Element ? event.target : null;
+  if (target?.closest("input, textarea, select, [contenteditable='true'], [role='combobox'], .n-input, .n-base-selection")) return;
   const buttons = [...root.value.querySelectorAll<HTMLElement>("button:not(:disabled), [role='radio']:not([aria-disabled='true'])")];
   if (!buttons.length) return;
   event.preventDefault();
@@ -238,6 +275,8 @@ const openElicitationUrl = async (): Promise<void> => {
             <NDescriptionsItem v-if="params.serverName" label="MCP 服务">{{ params.serverName }}</NDescriptionsItem>
             <NDescriptionsItem v-if="params.tool" label="工具">{{ params.tool }}</NDescriptionsItem>
             <NDescriptionsItem v-if="params.message" label="说明">{{ params.message }}</NDescriptionsItem>
+            <NDescriptionsItem v-if="params.grantRoot" label="会话写入范围">{{ params.grantRoot }}</NDescriptionsItem>
+            <NDescriptionsItem v-if="params.networkApprovalContext" label="网络目标">{{ (params.networkApprovalContext as Record<string, unknown>).protocol }}://{{ (params.networkApprovalContext as Record<string, unknown>).host }}</NDescriptionsItem>
           </NDescriptions>
 
           <template v-if="activeRequest.method === 'item/tool/requestUserInput'">
@@ -285,7 +324,12 @@ const openElicitationUrl = async (): Promise<void> => {
           </template>
 
           <template v-else-if="activeRequest.method === 'item/permissions/requestApproval'">
-            <pre class="request-json">{{ JSON.stringify(params.permissions, null, 2) }}</pre>
+            <NAlert type="warning">仅勾选完成当前任务所必需的权限；“本会话允许”会持续到当前会话结束。</NAlert>
+            <div class="approval-risk-summary">
+              <div v-if="networkPermission.enabled !== undefined && networkPermission.enabled !== null"><strong>网络：</strong>{{ networkPermission.enabled ? "允许联网" : "保持禁用" }}</div>
+              <div v-for="(entry, index) in filePermissionEntries" :key="index"><strong>{{ entry.access }}：</strong>{{ displayPath(entry.path) }}</div>
+              <div v-if="!Object.keys(networkPermission).length && !filePermissionEntries.length">Codex 未提供可读的权限范围，请谨慎决定。</div>
+            </div>
             <NSpace>
               <NCheckbox v-if="(params.permissions as Record<string, unknown>)?.network" v-model:checked="permissionSelection.network">允许请求的网络范围</NCheckbox>
               <NCheckbox v-if="(params.permissions as Record<string, unknown>)?.fileSystem" v-model:checked="permissionSelection.fileSystem">允许请求的文件范围</NCheckbox>
@@ -298,7 +342,15 @@ const openElicitationUrl = async (): Promise<void> => {
           </template>
 
           <template v-else-if="['item/commandExecution/requestApproval', 'item/fileChange/requestApproval', 'applyPatchApproval', 'execCommandApproval'].includes(activeRequest.method)">
-            <pre v-if="params.additionalPermissions || params.fileChanges || params.networkApprovalContext || params.commandActions || params.proposedExecpolicyAmendment || params.proposedNetworkPolicyAmendments" class="request-json">{{ JSON.stringify({ additionalPermissions: params.additionalPermissions, fileChanges: params.fileChanges, networkApprovalContext: params.networkApprovalContext, commandActions: params.commandActions, proposedExecpolicyAmendment: params.proposedExecpolicyAmendment, proposedNetworkPolicyAmendments: params.proposedNetworkPolicyAmendments }, null, 2) }}</pre>
+            <NAlert v-if="params.additionalPermissions || params.networkApprovalContext || params.grantRoot" type="warning">此操作需要扩大当前权限范围。请核对目标、目录和持续时间后再允许。</NAlert>
+            <div v-if="requestedCommandActions.length || requestedFileChanges.length || Object.keys(permissionProfile).length || params.proposedExecpolicyAmendment || params.proposedNetworkPolicyAmendments" class="approval-risk-summary">
+              <div v-for="(action, index) in requestedCommandActions" :key="`action-${index}`"><strong>操作 {{ index + 1 }}：</strong>{{ commandActionLabel(action) }}</div>
+              <div v-for="entry in requestedFileChanges" :key="entry.path"><strong>{{ fileChangeLabel(entry.change) }}：</strong>{{ entry.path }}<span v-if="entry.change.move_path"> → {{ entry.change.move_path }}</span></div>
+              <div v-if="networkPermission.enabled"><strong>附加权限：</strong>允许联网</div>
+              <div v-for="(entry, index) in filePermissionEntries" :key="`permission-${index}`"><strong>附加{{ entry.access }}：</strong>{{ displayPath(entry.path) }}</div>
+              <div v-if="params.proposedExecpolicyAmendment"><strong>命令规则：</strong>{{ safeJson(params.proposedExecpolicyAmendment) }}</div>
+              <div v-for="(amendment, index) in (params.proposedNetworkPolicyAmendments as unknown[] ?? [])" :key="`network-${index}`"><strong>网络规则：</strong>{{ (amendment as Record<string, unknown>).action }} {{ (amendment as Record<string, unknown>).host }}</div>
+            </div>
             <NSpace>
               <NButton v-for="(decision, index) in availableDecisions" :key="index" :type="decisionType(decision)" :secondary="decision !== 'accept'" @click="resolveDecision(decision)">
                 {{ decisionLabel(decision) }}
@@ -307,7 +359,8 @@ const openElicitationUrl = async (): Promise<void> => {
           </template>
 
           <template v-else>
-            <pre class="request-json">{{ JSON.stringify(params, null, 2) }}</pre>
+            <NAlert type="error">此版本未注册该客户端能力。为避免未经确认的外部操作，请安全拒绝。</NAlert>
+            <pre class="request-json">{{ safeJson(params) }}</pre>
             <NButton type="error" secondary @click="rejectUnsupported">安全拒绝此请求</NButton>
           </template>
 

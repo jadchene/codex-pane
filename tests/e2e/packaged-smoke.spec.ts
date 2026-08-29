@@ -205,7 +205,7 @@ test("verifies the packaged Windows executable, protected persistence, reconnect
       await expect(window.locator(".message-agent").last()).toContainText("图片附件联调成功", { timeout: 90_000 });
       await composer.fill("请使用命令工具执行 PowerShell 命令 Get-Location，然后用一句话说明当前目录。不要修改任何文件。");
       await composer.press("Enter");
-      await expect(window.getByRole("heading", { name: /^Ran command/ }).last()).toBeVisible({ timeout: 90_000 });
+      await expect(window.getByRole("heading", { name: /^已运行命令/ }).last()).toBeVisible({ timeout: 90_000 });
       await expect(window.getByText(/Working/)).toHaveCount(0, { timeout: 30_000 });
     }
   } finally {

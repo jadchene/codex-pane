@@ -15,6 +15,7 @@ const props = withDefaults(defineProps<{
   pendingRequests: PendingServerRequest[];
   approvalResolving: boolean;
   rateLimitLabels: string[];
+  paneNumber?: number;
   showTitle?: boolean;
   approvalReviewer?: string | null;
   approvalPolicy?: string | null;
@@ -56,6 +57,9 @@ const fileSuggestions = ref<Array<{ name: string; path: string; relativePath: st
 const fileSearchState = ref<"idle" | "searching" | "ready" | "error">("idle");
 const composerMenuDismissed = ref(false);
 const composerHint = ref("");
+const promptHistory = ref<string[]>([]);
+const promptHistoryIndex = ref(-1);
+const promptHistoryDraft = ref("");
 let fileSearchSequence = 0;
 let fileSearchTimer: ReturnType<typeof setTimeout> | null = null;
 const effortLabels: Record<string, string> = { minimal: "最低", low: "低", medium: "中等", high: "高", xhigh: "极高" };
@@ -94,7 +98,9 @@ const activeToken = (marker: "@" | "$"): ComposerToken | null => {
 };
 const skillToken = computed(() => activeToken("@"));
 const skillQuery = computed(() => skillToken.value?.query.toLocaleLowerCase() ?? null);
-const filteredSkills = computed(() => skillQuery.value === null ? [] : props.pane.skills.filter((skill) => skill.name.toLocaleLowerCase().includes(skillQuery.value!)));
+const filteredSkills = computed(() => skillQuery.value === null ? [] : props.pane.skills.filter((skill) =>
+  `${skill.name} ${skill.description ?? ""}`.toLocaleLowerCase().includes(skillQuery.value!)
+));
 const fileToken = computed(() => activeToken("$"));
 const fileQuery = computed(() => fileToken.value?.query ?? null);
 const composerMenuMode = computed<"slash" | "skill" | "file" | null>(() => slashQuery.value !== null ? "slash" : skillQuery.value !== null ? "skill" : fileQuery.value !== null ? "file" : null);
@@ -257,6 +263,12 @@ const scrollComposerSelectionIntoView = async (): Promise<void> => {
   document.querySelector<HTMLElement>(".composer-options-menu .slash-option-active")?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
 };
 const submitComposer = (): void => {
+  const submittedDraft = props.pane.draft.trim();
+  if (submittedDraft && promptHistory.value.at(-1) !== submittedDraft) {
+    promptHistory.value = [...promptHistory.value.slice(-49), submittedDraft];
+  }
+  promptHistoryIndex.value = -1;
+  promptHistoryDraft.value = "";
   const match = props.pane.draft.trim().match(/^\/(new|resume|cd|cwd|status|compact|review|mcp|skills|agents|permission|permissions|ps|processes|stop|kill-processes|fast|goal|plan|rename)(?:\s+([\s\S]*))?$/i);
   const command = match?.[1]?.toLowerCase();
   if (!command) {
@@ -269,7 +281,52 @@ const submitComposer = (): void => {
   else if (command === "resume") emit("openSessions");
   else emit("slashCommand", `${command} ${match?.[2] ?? ""}`.trim());
 };
+const recallPrompt = (direction: -1 | 1): void => {
+  if (!promptHistory.value.length) return;
+  if (promptHistoryIndex.value === -1) {
+    if (direction > 0) return;
+    promptHistoryDraft.value = props.pane.draft;
+    promptHistoryIndex.value = promptHistory.value.length - 1;
+  } else {
+    const next = promptHistoryIndex.value + direction;
+    if (next >= promptHistory.value.length) {
+      promptHistoryIndex.value = -1;
+      props.pane.draft = promptHistoryDraft.value;
+      void placeComposerCaret(props.pane.draft.length);
+      return;
+    }
+    promptHistoryIndex.value = Math.max(0, next);
+  }
+  props.pane.draft = promptHistory.value[promptHistoryIndex.value] ?? "";
+  void placeComposerCaret(props.pane.draft.length);
+};
 const handleKeydown = (event: KeyboardEvent): void => {
+  if (composerMenuVisible.value && (event.key === "ArrowDown" || event.key === "ArrowUp" || event.ctrlKey && !event.altKey && !event.metaKey && ["n", "p"].includes(event.key.toLowerCase()) || event.key === "Tab")) {
+    if (!activeComposerOptions.value.length) return;
+    event.preventDefault();
+    const moveNext = event.key === "ArrowDown" || event.ctrlKey && event.key.toLowerCase() === "n";
+    const movePrevious = event.key === "ArrowUp" || event.ctrlKey && event.key.toLowerCase() === "p" || event.key === "Tab" && event.shiftKey;
+    if (moveNext) slashIndex.value = (slashIndex.value + 1) % activeComposerOptions.value.length;
+    else if (movePrevious) slashIndex.value = slashIndex.value < 0 ? activeComposerOptions.value.length - 1 : (slashIndex.value - 1 + activeComposerOptions.value.length) % activeComposerOptions.value.length;
+    if (moveNext || movePrevious) void scrollComposerSelectionIntoView();
+    else if (composerMenuMode.value === "slash") completeSlash();
+    else if (composerMenuMode.value === "skill") {
+      const skill = filteredSkills.value[slashIndex.value] ?? filteredSkills.value[0];
+      if (skill) selectSkill(skill.name);
+    } else {
+      const file = fileSuggestions.value[slashIndex.value] ?? fileSuggestions.value[0];
+      if (file) selectFile(file.path);
+    }
+    return;
+  }
+  const textarea = event.currentTarget instanceof HTMLTextAreaElement ? event.currentTarget : composerTextarea();
+  if (!composerMenuVisible.value && !event.isComposing && !event.altKey && !event.ctrlKey && !event.metaKey
+    && (event.key === "ArrowUp" && (textarea?.selectionStart ?? 0) === 0
+      || event.key === "ArrowDown" && promptHistoryIndex.value >= 0 && (textarea?.selectionEnd ?? 0) === props.pane.draft.length)) {
+    event.preventDefault();
+    recallPrompt(event.key === "ArrowUp" ? -1 : 1);
+    return;
+  }
   if (event.key === "ArrowDown" && props.pane.draft.length === 0 && !event.isComposing) {
     event.preventDefault();
     void forceScrollToBottom();
@@ -284,22 +341,6 @@ const handleKeydown = (event: KeyboardEvent): void => {
     }
     else if (composerMenuMode.value === "skill" && option && "name" in option) selectSkill(option.name);
     else if (composerMenuMode.value === "file" && option && "path" in option) selectFile(option.path);
-    return;
-  }
-  if (composerMenuVisible.value && ["ArrowDown", "ArrowUp", "Tab"].includes(event.key)) {
-    if (!activeComposerOptions.value.length) return;
-    event.preventDefault();
-    if (event.key === "ArrowDown") slashIndex.value = (slashIndex.value + 1) % activeComposerOptions.value.length;
-    else if (event.key === "ArrowUp") slashIndex.value = slashIndex.value < 0 ? activeComposerOptions.value.length - 1 : (slashIndex.value - 1 + activeComposerOptions.value.length) % activeComposerOptions.value.length;
-    if (event.key === "ArrowDown" || event.key === "ArrowUp") void scrollComposerSelectionIntoView();
-    else if (composerMenuMode.value === "slash") completeSlash();
-    else if (composerMenuMode.value === "skill") {
-      const skill = filteredSkills.value[slashIndex.value] ?? filteredSkills.value[0];
-      if (skill) selectSkill(skill.name);
-    } else {
-      const file = fileSuggestions.value[slashIndex.value] ?? fileSuggestions.value[0];
-      if (file) selectFile(file.path);
-    }
     return;
   }
   if (event.key === "Escape" && composerMenuVisible.value) {
@@ -443,6 +484,7 @@ defineExpose({ focusComposer });
     <header v-if="showTitle !== false || pane.status === 'interrupting' || pane.status === 'error'" class="pane-header">
       <div v-if="showTitle !== false" class="pane-title-wrap">
         <span v-if="pane.unread" class="unread-dot" aria-label="有新内容" />
+        <span v-if="paneNumber" class="pane-number" :title="`按 Alt+${paneNumber} 聚焦此窗格`">{{ paneNumber }}</span>
         <strong class="pane-title">{{ pane.title || "新会话" }}</strong>
       </div>
       <NTag v-if="pane.status === 'interrupting' || pane.status === 'error'" size="small" :type="pane.status === 'error' ? 'error' : 'warning'">
@@ -494,8 +536,13 @@ defineExpose({ focusComposer });
       </div>
 
       <NDropdown trigger="manual" placement="top-start" scrollable :show="composerMenuVisible" :options="composerDropdownOptions" :menu-props="composerMenuProps" @select="selectComposerOption">
-        <NInput ref="composer" v-model:value="pane.draft" type="textarea" :maxlength="200000" :autosize="{ minRows: 2, maxRows: 8 }" :input-props="{ ...noSpellcheckInputProps, 'aria-label': '消息输入框' }" placeholder="描述任务，或输入 /、@、$ 快速开始…" @click="syncComposerCaret" @keyup="syncComposerCaret" @select="syncComposerCaret" @keydown="handleKeydown" @paste="handlePaste" />
+        <NInput ref="composer" v-model:value="pane.draft" type="textarea" :maxlength="200000" :autosize="{ minRows: 2, maxRows: 8 }" :input-props="{ ...noSpellcheckInputProps, 'aria-label': '消息输入框', 'aria-keyshortcuts': 'Enter Shift+Enter ArrowUp ArrowDown' }" placeholder="描述任务，或输入 /、@、$ 快速开始…" @click="syncComposerCaret" @keyup="syncComposerCaret" @select="syncComposerCaret" @keydown="handleKeydown" @paste="handlePaste" />
       </NDropdown>
+
+      <div v-if="composerMenuVisible" class="composer-menu-help" role="status">
+        <span><kbd>↑</kbd><kbd>↓</kbd> 或 <kbd>Ctrl+P</kbd><kbd>Ctrl+N</kbd> 选择</span>
+        <span><kbd>Tab</kbd> 补全 · <kbd>Shift+Tab</kbd> 上一项 · <kbd>Enter</kbd> 确认 · <kbd>Esc</kbd> 关闭</span>
+      </div>
 
       <div v-if="composerDisabledReason || composerHint || pane.draft.length >= 180000" class="composer-notice" role="status">
         <span v-if="composerDisabledReason" class="composer-warning">{{ composerDisabledReason }}</span>
@@ -530,13 +577,13 @@ defineExpose({ focusComposer });
 
       <footer class="status-line">
         <span v-if="pane.status === 'running' || pane.status === 'starting'" class="working-indicator" role="status">处理中<span class="working-dots">...</span></span>
-        <span v-if="permissionModeLabel" class="auto-review-indicator" role="status">{{ permissionModeLabel }}</span>
+        <button v-if="permissionModeLabel" class="status-action auto-review-indicator" type="button" title="查看或切换权限模式（/permissions）" @click="emit('slashCommand', 'permissions')">{{ permissionModeLabel }}</button>
         <span v-if="pane.collaborationMode === 'plan'">计划模式</span>
         <span v-if="goalStatusLabel">{{ goalStatusLabel }}</span>
         <span v-if="pane.activeFlags?.includes('waitingOnApproval')">等待操作确认</span>
         <span v-else-if="pane.activeFlags?.includes('waitingOnUserInput')">等待你的选择</span>
-        <span v-if="activeSubAgentCount">子代理 {{ activeSubAgentCount }}</span>
-        <span v-if="backgroundTaskCount">后台任务 {{ backgroundTaskCount }}</span>
+        <button v-if="activeSubAgentCount" class="status-action" type="button" title="查看子代理（/agents）" @click="emit('slashCommand', 'agents')">子代理 {{ activeSubAgentCount }}</button>
+        <button v-if="backgroundTaskCount" class="status-action" type="button" title="查看后台任务（/ps）" @click="emit('slashCommand', 'ps')">后台任务 {{ backgroundTaskCount }}</button>
         <span v-if="contextLabel" class="context-usage" :class="{ 'context-usage-warning': (contextUsedPercent ?? 0) >= 80, 'context-usage-critical': (contextUsedPercent ?? 0) >= 95 }" :title="`剩余 ${100 - (contextUsedPercent ?? 0)}%`">{{ contextLabel }}</span>
         <span v-for="label in rateLimitLabels" :key="label">{{ label }}</span>
       </footer>

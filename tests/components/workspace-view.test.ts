@@ -34,6 +34,10 @@ describe("WorkspaceView focus navigation", () => {
     await wrapper.get("main").trigger("keydown", { key: "ArrowDown", altKey: true });
     expect(store.state.focusedPaneId).toBe(store.state.panes[3]!.id);
     expect(wrapper.findAll("[data-test-pane]")).toHaveLength(4);
+    await wrapper.get("main").trigger("keydown", { key: "4", altKey: true });
+    expect(store.state.focusedPaneId).toBe(store.state.panes[3]!.id);
+    await wrapper.get("main").trigger("keydown", { key: "6", altKey: true });
+    expect(store.state.focusedPaneId).toBe(store.state.panes[3]!.id);
   });
 
   it.each([
@@ -87,5 +91,7 @@ describe("WorkspaceView focus navigation", () => {
     expect(wrapper.find("[data-test-sidebar]").exists()).toBe(false);
     await wrapper.get('button[aria-label="展开会话侧栏"]').trigger("click");
     expect(wrapper.find("[data-test-sidebar]").exists()).toBe(true);
+    await wrapper.get("main").trigger("keydown", { key: "b", ctrlKey: true, shiftKey: true });
+    expect(wrapper.get(".session-workspace").classes()).toContain("session-workspace-sidebar-collapsed");
   });
 });

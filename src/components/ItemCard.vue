@@ -170,11 +170,15 @@ const reasoningText = computed(() => {
   return parts.map((part) => part.trim()).filter(Boolean).join("\n\n");
 });
 const reviewText = computed(() => textValue(firstValue("review", "summary", "message", "target")));
+const humanizeType = (value: string): string => value
+  .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+  .replace(/[_/-]+/g, " ")
+  .trim();
 const title = computed(() => ({
   reasoning: "思考摘要", commandExecution: "命令执行", fileChange: "文件变更", mcpToolCall: "MCP 工具", dynamicToolCall: "工具调用",
   collabAgentToolCall: "协作代理", subAgentActivity: "代理活动", agents: "协作代理", backgroundProcesses: "后台进程", webSearch: "网络搜索", imageView: "查看图片", imageGeneration: "生成图片",
   enteredReviewMode: "开始审查", exitedReviewMode: "审查完成", contextCompaction: "上下文压缩", plan: "计划", status: "当前状态", mcpStatus: "MCP 状态", skills: "可用技能"
-}[props.item.type] ?? "运行详情"));
+}[props.item.type] ?? `协议事件 · ${humanizeType(props.item.type) || "未知类型"}`));
 const statusLabel = computed(() => {
   const status = String(record.value.status ?? props.item.status);
   return ({ completed: "已完成", running: "进行中", failed: "失败", error: "失败", declined: "已拒绝", inProgress: "进行中" }[status] ?? status);
@@ -230,7 +234,7 @@ const commandText = computed(() => {
   const value = firstValue("command", "commandLine");
   return typeof value === "string" ? redactText(unwrapPowerShellCommand(value)) : textValue(value);
 });
-const commandStateLabel = computed(() => ["inProgress", "running"].includes(String(record.value.status ?? props.item.status)) ? "Running" : "Ran");
+const commandStateLabel = computed(() => ["inProgress", "running"].includes(String(record.value.status ?? props.item.status)) ? "正在运行" : "已运行");
 const commandOutput = computed(() => {
   const value = firstValue("aggregatedOutput", "output", "stdout") ?? props.item.streamText;
   return value ? redactText(String(value)) : "";
@@ -506,7 +510,7 @@ const copyText = async (value: string): Promise<void> => {
   </NCard>
 
   <NCard v-else-if="item.type === 'commandExecution'" size="small" class="tool-card item-card" :content-style="compactContentStyle" :header-style="compactHeaderStyle">
-    <template #header><span class="card-title"><NIcon :component="TerminalOutline" /> {{ commandStateLabel }} command</span></template><template #header-extra><NTag size="small" :type="statusType">{{ statusLabel }}</NTag></template>
+    <template #header><span class="card-title"><NIcon :component="TerminalOutline" /> {{ commandStateLabel }}命令</span></template><template #header-extra><NTag size="small" :type="statusType">{{ statusLabel }}</NTag></template>
     <NCode v-if="commandText !== '—'" :code="commandText" language="powershell" word-wrap />
     <div class="inline-detail-fields"><span v-if="record.cwd" class="inline-detail-field"><NText depth="3">目录：</NText><span>{{ textValue(record.cwd) }}</span></span><span v-if="record.exitCode !== undefined" class="inline-detail-field"><NText depth="3">退出码：</NText><span>{{ record.exitCode }}</span></span><span v-if="durationLabel" class="inline-detail-field"><NText depth="3">耗时：</NText><span>{{ durationLabel }}</span></span></div>
     <NCollapse v-if="commandOutput"><NCollapseItem title="输出" name="output"><pre class="long-output">{{ shortenedText(commandOutput) }}</pre><NButton v-if="commandOutput.length > 12000" text type="primary" @click="copyText(commandOutput)">复制完整输出</NButton></NCollapseItem></NCollapse>
