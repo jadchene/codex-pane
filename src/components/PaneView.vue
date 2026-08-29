@@ -3,6 +3,7 @@ import { computed, h, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { NAlert, NButton, NDropdown, NIcon, NInput, NSelect, NTag, NText, NTooltip } from "naive-ui";
 import { AddOutline, ArrowDownOutline, AttachOutline, DocumentTextOutline, FolderOpenOutline, LinkOutline, PauseOutline, SendOutline } from "@vicons/ionicons5";
 import type { ItemAction, PaneState, PendingServerRequest, UiItem } from "../types";
+import { readComposerHistory, writeComposerHistory } from "../composer-history";
 import ApprovalCenter from "./ApprovalCenter.vue";
 import ItemCard from "./ItemCard.vue";
 import VirtualList from "./VirtualList.vue";
@@ -57,7 +58,7 @@ const fileSuggestions = ref<Array<{ name: string; path: string; relativePath: st
 const fileSearchState = ref<"idle" | "searching" | "ready" | "error">("idle");
 const composerMenuDismissed = ref(false);
 const composerHint = ref("");
-const promptHistory = ref<string[]>([]);
+const promptHistory = ref<string[]>(readComposerHistory(props.pane.id));
 const promptHistoryIndex = ref(-1);
 const promptHistoryDraft = ref("");
 let fileSearchSequence = 0;
@@ -104,7 +105,7 @@ const filteredSkills = computed(() => skillQuery.value === null ? [] : props.pan
 const fileToken = computed(() => activeToken("$"));
 const fileQuery = computed(() => fileToken.value?.query ?? null);
 const composerMenuMode = computed<"slash" | "skill" | "file" | null>(() => slashQuery.value !== null ? "slash" : skillQuery.value !== null ? "skill" : fileQuery.value !== null ? "file" : null);
-const composerMenuVisible = computed(() => composerMenuMode.value !== null && !composerMenuDismissed.value);
+const composerMenuVisible = computed(() => props.focused && composerMenuMode.value !== null && !composerMenuDismissed.value);
 const effectiveCwd = computed(() => props.pane.cwd || props.defaultCwd || "未设置工作目录");
 const contextUsedPercent = computed(() => {
   const remaining = props.pane.contextRemainingPercent;
@@ -263,9 +264,14 @@ const scrollComposerSelectionIntoView = async (): Promise<void> => {
   document.querySelector<HTMLElement>(".composer-options-menu .slash-option-active")?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
 };
 const submitComposer = (): void => {
+  if (composerUnavailable.value) {
+    if (composerDisabledReason.value) composerHint.value = composerDisabledReason.value;
+    return;
+  }
   const submittedDraft = props.pane.draft.trim();
   if (submittedDraft && promptHistory.value.at(-1) !== submittedDraft) {
     promptHistory.value = [...promptHistory.value.slice(-49), submittedDraft];
+    writeComposerHistory(props.pane.id, promptHistory.value);
   }
   promptHistoryIndex.value = -1;
   promptHistoryDraft.value = "";
@@ -418,6 +424,11 @@ watch(() => props.pane.draft, async () => {
   const textarea = composerTextarea();
   composerCaret.value = textarea?.selectionStart ?? props.pane.draft.length;
 });
+watch(() => props.pane, (pane) => {
+  promptHistory.value = readComposerHistory(pane.id);
+  promptHistoryIndex.value = -1;
+  promptHistoryDraft.value = "";
+});
 watch(() => props.focused, (focused) => {
   if (focused && props.pendingRequests.length === 0 && !hasFocusedInteractiveControl() && !window.getSelection()?.toString()) void focusComposer();
 });
@@ -426,11 +437,11 @@ watch(skillQuery, (query, previous) => {
   if (query !== null && previous === null) emit("openSkills");
   slashIndex.value = -1;
 });
-watch(fileQuery, (query) => {
+watch([fileQuery, () => props.focused], ([query, focused]) => {
   slashIndex.value = -1;
   if (fileSearchTimer) clearTimeout(fileSearchTimer);
   const sequence = ++fileSearchSequence;
-  if (query === null || !props.searchFiles) {
+  if (!focused || query === null || !props.searchFiles) {
     fileSuggestions.value = [];
     fileSearchState.value = "idle";
     return;

@@ -34,7 +34,7 @@ const mountPane = (value = reactive(pane()), pendingRequests: PendingServerReque
   value,
   wrapper: mount(PaneView, {
     attachTo: document.body,
-    props: { pane: value, defaultCwd: "E:\\Work", models, focused: false, pendingRequests, approvalResolving: false, rateLimitLabels: ["5h 80%"], searchFiles },
+    props: { pane: value, defaultCwd: "E:\\Work", models, focused: true, pendingRequests, approvalResolving: false, rateLimitLabels: ["5h 80%"], searchFiles },
     global: {
       stubs: {
         ItemCard: true,
@@ -170,6 +170,14 @@ describe("PaneView compact workbench interactions", () => {
     value.draft = "";
     await nextTick();
     expect(wrapper.findAll("button").find((button) => button.text() === "追加")!.attributes("disabled")).toBeDefined();
+
+    value.status = "starting";
+    value.draft = "不能提前发送";
+    await nextTick();
+    await textarea.trigger("keydown", { key: "Enter" });
+    expect(wrapper.emitted("send")).toBeUndefined();
+    expect(value.draft).toBe("不能提前发送");
+    expect(wrapper.get(".composer-notice").text()).toContain("会话正在启动");
   });
 
   it("does not overwrite a draft when the slash-command button is clicked", async () => {
@@ -490,6 +498,22 @@ describe("PaneView compact workbench interactions", () => {
     expect(value.draft).toBe("尚未发送的草稿");
   });
 
+  it("preserves prompt history when the same pane is remounted after a workspace mode switch", async () => {
+    const value = reactive(pane());
+    const first = mountPane(value);
+    await first.wrapper.get("textarea").setValue("跨模式保留的任务");
+    await first.wrapper.get("textarea").trigger("keydown", { key: "Enter" });
+    expect(first.wrapper.emitted("send")).toHaveLength(1);
+    first.wrapper.unmount();
+    value.draft = "";
+
+    const second = mountPane(value);
+    const textarea = second.wrapper.get("textarea");
+    (textarea.element as HTMLTextAreaElement).setSelectionRange(0, 0);
+    await textarea.trigger("keydown", { key: "ArrowUp" });
+    expect(value.draft).toBe("跨模式保留的任务");
+  });
+
   it("searches Skill descriptions and explains keyboard menu controls", async () => {
     const value = reactive(pane());
     value.skills = [{ name: "project-verify", description: "检查发布质量", path: "E:\\Skills\\project-verify\\SKILL.md" }];
@@ -500,6 +524,8 @@ describe("PaneView compact workbench interactions", () => {
     expect(wrapper.getComponent(NDropdown).props("options")?.[0]?.key).toBe("skill:project-verify");
     expect(wrapper.get(".composer-menu-help").text()).toContain("Ctrl+P");
     expect(wrapper.get(".composer-menu-help").text()).toContain("Shift+Tab");
+    await wrapper.setProps({ focused: false });
+    expect(wrapper.getComponent(NDropdown).props("show")).toBe(false);
   });
 
   it("returns focus to the composer after the inline approval completes", async () => {

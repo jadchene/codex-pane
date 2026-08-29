@@ -323,7 +323,19 @@ export const useWorkspaceStore = defineStore("workspace", () => {
       if (!getString(params.threadId)) return;
     }
     if ((method === "warning" || method === "configWarning") && !getString(params.threadId)) {
-      addNotice(getString(params.message) ?? "Codex 返回了一条警告");
+      addNotice(getString(params.message) ?? getString(params.summary) ?? getString(params.details) ?? "Codex 返回了一条警告");
+    }
+    if (method === "deprecationNotice") {
+      addNotice([getString(params.summary), getString(params.details)].filter(Boolean).join("：") || "当前 Codex 功能即将停用，请检查升级说明。");
+      return;
+    }
+    if (method === "windows/worldWritableWarning") {
+      const paths = Array.isArray(params.samplePaths) ? params.samplePaths.filter((path): path is string => typeof path === "string") : [];
+      const extra = typeof params.extraCount === "number" && params.extraCount > 0 ? `，另有 ${params.extraCount} 个路径` : "";
+      addNotice(params.failedScan
+        ? "无法完成 Windows 公共可写目录安全检查，请检查工作区权限。"
+        : paths.length ? `检测到所有用户均可写的路径：${paths.slice(0, 3).join("、")}${extra}` : "检测到存在所有用户均可写的路径，请检查工作区权限。");
+      return;
     }
     if (method === "account/login/completed" && params.success === false) {
       addNotice(`登录未完成：${getString(params.error) ?? "请重试"}`);
@@ -342,6 +354,54 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   };
 
   const reducePaneNotification = (pane: PaneState, method: string, params: Record<string, unknown>): void => {
+    const appendProtocolNotice = (title: string, message: string, tone: "info" | "warning" | "error" = "warning", details?: unknown): void => {
+      const turnId = getString(params.turnId) ?? "local";
+      const previous = pane.items.at(-1);
+      if (previous?.type === "protocolNotice" && previous.turnId === turnId && getString(previous.data.title) === title) {
+        previous.data = markRaw({ title, message, tone, details });
+        previous.status = tone === "error" ? "failed" : "completed";
+        return;
+      }
+      appendPaneItem(pane, {
+        id: crypto.randomUUID(),
+        turnId,
+        type: "protocolNotice",
+        data: { title, message, tone, details },
+        streamText: "",
+        status: tone === "error" ? "failed" : "completed"
+      });
+    };
+    if (method === "warning" || method === "configWarning") {
+      appendProtocolNotice(method === "configWarning" ? "配置警告" : "Codex 警告", getString(params.message) ?? getString(params.summary) ?? "Codex 返回了一条警告", "warning", getString(params.details) ?? params.path);
+      return;
+    }
+    if (method === "model/rerouted") {
+      const from = getString(params.fromModel) ?? "原模型";
+      const to = getString(params.toModel) ?? "备用模型";
+      appendProtocolNotice("模型已切换", `${from} → ${to}`, "warning", getString(params.reason) === "highRiskCyberActivity" ? "由于任务涉及高风险网络安全活动，Codex 已改用安全模型。" : params.reason);
+      return;
+    }
+    if (method === "model/safetyBuffering/updated") {
+      appendProtocolNotice("安全检查", params.showBufferingUi === true
+        ? `模型 ${getString(params.model) ?? "Codex"} 正在检查当前请求，响应可能稍慢。`
+        : "安全检查已结束，正在继续生成响应。", "info", params.showBufferingUi === true && Array.isArray(params.reasons) ? params.reasons : undefined);
+      return;
+    }
+    if (method === "model/verification") {
+      appendProtocolNotice("模型验证", "当前任务需要额外的模型能力验证。", "info", params.verifications);
+      return;
+    }
+    if (method === "thread/environment/disconnected") {
+      appendProtocolNotice("运行环境已断开", "当前会话的运行环境连接已中断；继续执行前可能需要重新连接。", "error", params.environmentId);
+      return;
+    }
+    if (method === "thread/environment/connected") {
+      const previous = pane.items.at(-1);
+      if (previous?.type === "protocolNotice" && getString(previous.data.title) === "运行环境已断开") {
+        appendProtocolNotice("运行环境已连接", "当前会话已重新连接到运行环境。", "info", params.environmentId);
+      }
+      return;
+    }
     if (method === "thread/goal/updated") {
       const previousGoal = pane.goal;
       const goal = getRecord(params.goal);

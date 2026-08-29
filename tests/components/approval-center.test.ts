@@ -65,6 +65,25 @@ describe("ApprovalCenter request lifecycle UI", () => {
     expect(wrapper.text()).not.toContain("sk-this-must-never-render");
   });
 
+  it("renders legacy argv commands and explains persistent policy decisions", () => {
+    const legacy = request(10, "execCommandApproval", "pane-1", {
+      command: ["C:\\Program Files\\PowerShell\\7\\pwsh.exe", "-Command", "Get-ChildItem -Force", "Bearer very-secret-token", "sk-this-must-never-render"],
+      availableDecisions: [
+        { acceptWithExecpolicyAmendment: { execpolicy_amendment: ["Get-ChildItem"] } },
+        { applyNetworkPolicyAmendment: { network_policy_amendment: { host: "example.com", action: "allow" } } }
+      ]
+    });
+    const wrapper = mountCenter([legacy]);
+    expect(wrapper.text()).toContain('"C:\\Program Files\\PowerShell\\7\\pwsh.exe" -Command "Get-ChildItem -Force"');
+    expect(wrapper.text()).toContain("允许并记住命令规则");
+    expect(wrapper.text()).toContain("允许并应用网络规则");
+    expect(wrapper.get(".approval-actions").text()).toContain("允许并记住命令规则");
+    expect(wrapper.text()).toContain("Bearer [已隐藏]");
+    expect(wrapper.text()).toContain("sk-[已隐藏]");
+    expect(wrapper.text()).not.toContain("very-secret-token");
+    expect(wrapper.text()).not.toContain("sk-this-must-never-render");
+  });
+
   it("validates and submits a user-input answer", async () => {
     const userInput = request("question-1", "item/tool/requestUserInput", "pane-1", {
       questions: [{ id: "purpose", header: "用途", question: "请输入用途", isSecret: false }]

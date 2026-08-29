@@ -6,7 +6,7 @@ import { useWorkspaceStore } from "../stores/workspace";
 import SessionListPanel from "./SessionListPanel.vue";
 
 const props = defineProps<{ pane: PaneState }>();
-const emit = defineEmits<{ activatePane: [paneId: string] }>();
+const emit = defineEmits<{ activatePane: [paneId: string]; focusConversation: [] }>();
 const store = useWorkspaceStore();
 const panel = ref<InstanceType<typeof SessionListPanel> | null>(null);
 const showAll = ref(false);
@@ -93,6 +93,7 @@ defineExpose({ focusSearch, refresh: load });
       @scope="changeScope"
       @resume="resumeSession"
       @new-session="newSession"
+      @exit="emit('focusConversation')"
     />
     <NModal
       :show="switchError !== null"

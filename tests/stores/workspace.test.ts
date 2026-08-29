@@ -904,6 +904,31 @@ describe("workspace state machine", () => {
     api.emitProtocol({ generation: 2, kind: "notification", payload: { method: "autoApprovalReview/strictReviewRequired", params: { threadId: "thread-a", turnId: "turn-a", startedAtMs: 21 } } });
     expect(pane.strictReviewRequired).toBe(true);
 
+    const itemsBeforeInitialConnection = pane.items.length;
+    api.emitProtocol({ generation: 2, kind: "notification", payload: { method: "thread/environment/connected", params: { threadId: "thread-a", environmentId: "env-a" } } });
+    expect(pane.items).toHaveLength(itemsBeforeInitialConnection);
+    api.emitProtocol({ generation: 2, kind: "notification", payload: { method: "warning", params: { threadId: "thread-a", message: "当前会话需要注意" } } });
+    expect(pane.items.at(-1)).toMatchObject({ type: "protocolNotice", data: { title: "Codex 警告", message: "当前会话需要注意" } });
+    api.emitProtocol({ generation: 2, kind: "notification", payload: { method: "model/rerouted", params: { threadId: "thread-a", turnId: "turn-a", fromModel: "gpt-5", toModel: "safety", reason: "highRiskCyberActivity" } } });
+    expect(pane.items.at(-1)).toMatchObject({ type: "protocolNotice", data: { title: "模型已切换", message: "gpt-5 → safety" } });
+    api.emitProtocol({ generation: 2, kind: "notification", payload: { method: "thread/environment/disconnected", params: { threadId: "thread-a", environmentId: "env-a" } } });
+    expect(pane.items.at(-1)).toMatchObject({ type: "protocolNotice", status: "failed", data: { title: "运行环境已断开" } });
+    api.emitProtocol({ generation: 2, kind: "notification", payload: { method: "thread/environment/connected", params: { threadId: "thread-a", environmentId: "env-a" } } });
+    expect(pane.items.at(-1)).toMatchObject({ type: "protocolNotice", data: { title: "运行环境已连接" } });
+
+    const noticeCount = pane.items.filter((item) => item.type === "protocolNotice").length;
+    api.emitProtocol({ generation: 2, kind: "notification", payload: { method: "thread/environment/connected", params: { threadId: "thread-a", environmentId: "env-a" } } });
+    expect(pane.items.filter((item) => item.type === "protocolNotice")).toHaveLength(noticeCount);
+    api.emitProtocol({ generation: 2, kind: "notification", payload: { method: "model/safetyBuffering/updated", params: { threadId: "thread-a", turnId: "turn-safety", model: "gpt-5", showBufferingUi: true, reasons: ["policy"] } } });
+    api.emitProtocol({ generation: 2, kind: "notification", payload: { method: "model/safetyBuffering/updated", params: { threadId: "thread-a", turnId: "turn-safety", model: "gpt-5", showBufferingUi: false } } });
+    expect(pane.items.filter((item) => item.type === "protocolNotice" && item.data.title === "安全检查")).toHaveLength(1);
+    expect(pane.items.at(-1)).toMatchObject({ type: "protocolNotice", data: { title: "安全检查", message: "安全检查已结束，正在继续生成响应。" } });
+
+    api.emitProtocol({ generation: 2, kind: "notification", payload: { method: "configWarning", params: { summary: "配置项已失效", details: "请替换旧字段" } } });
+    expect(store.state.notices.at(-1)).toBe("配置项已失效");
+    api.emitProtocol({ generation: 2, kind: "notification", payload: { method: "deprecationNotice", params: { summary: "旧方法将移除", details: "请迁移" } } });
+    expect(store.state.notices.at(-1)).toBe("旧方法将移除：请迁移");
+
     api.emitProtocol({ generation: 2, kind: "notification", payload: { method: "thread/tokenUsage/updated", params: { threadId: "thread-a", turnId: "turn-a", tokenUsage: { total: { totalTokens: 90_000 }, last: { totalTokens: 56_000 }, modelContextWindow: 100_000 } } } });
     expect(pane.contextRemainingPercent).toBe(50);
     await store.executeSlashCommand(pane, "status");

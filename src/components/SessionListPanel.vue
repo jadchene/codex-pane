@@ -32,6 +32,7 @@ const emit = defineEmits<{
   scope: [showAll: boolean, search: string];
   resume: [threadId: string];
   newSession: [];
+  exit: [];
 }>();
 const search = ref("");
 const searchInput = ref<{ focus: () => void } | null>(null);
@@ -45,6 +46,23 @@ const focusSearch = async (): Promise<void> => {
   await nextTick();
   searchInput.value?.focus();
 };
+const handlePanelKeydown = (event: KeyboardEvent): void => {
+  if (event.key === "Escape") {
+    event.preventDefault();
+    emit("exit");
+    return;
+  }
+  if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+  const target = event.target instanceof Element ? event.target : null;
+  if (!target?.closest(".session-item-button")) return;
+  const buttons = [...(event.currentTarget as HTMLElement).querySelectorAll<HTMLButtonElement>(".session-item-button:not(:disabled)")];
+  if (!buttons.length) return;
+  event.preventDefault();
+  const current = Math.max(0, buttons.indexOf(document.activeElement as HTMLButtonElement));
+  const next = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1 : event.key === "ArrowDown" ? Math.min(buttons.length - 1, current + 1) : Math.max(0, current - 1);
+  buttons[next]?.focus();
+  buttons[next]?.scrollIntoView?.({ block: "nearest" });
+};
 
 watch(search, (value) => {
   if (timer) clearTimeout(timer);
@@ -55,7 +73,7 @@ defineExpose({ focusSearch });
 </script>
 
 <template>
-  <div class="session-list-panel">
+  <div class="session-list-panel" @keydown="handlePanelKeydown">
     <NButton v-if="showNew" type="primary" secondary class="session-new-button" @click="emit('newSession')">
       <template #icon><NIcon :component="AddOutline" /></template>
       新建会话

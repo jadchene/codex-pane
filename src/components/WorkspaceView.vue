@@ -89,7 +89,7 @@ defineExpose({ focusPaneById, focusSessionList });
   <main class="workspace" :class="[`workspace-layout-${store.state.layout}`, `workspace-mode-${store.state.workspaceMode}`]" @keydown="handleWorkspaceKeydown">
     <div v-if="store.state.workspaceMode === 'sessionSidebar'" class="session-workspace" :class="{ 'session-workspace-sidebar-collapsed': sidebarCollapsed }">
       <div class="session-sidebar-shell">
-        <SessionSidebar v-if="!sidebarCollapsed" ref="sessionSidebar" :pane="sessionPane" @activate-pane="focusPaneById" />
+        <SessionSidebar v-if="!sidebarCollapsed" ref="sessionSidebar" :pane="sessionPane" @activate-pane="focusPaneById" @focus-conversation="focusPane(sessionPaneIndex)" />
         <NTooltip placement="right">
           <template #trigger><NButton quaternary circle size="small" class="session-sidebar-collapse" aria-keyshortcuts="Control+Shift+B" :aria-label="sidebarCollapsed ? '展开会话侧栏' : '收起会话侧栏'" @click="sidebarCollapsed = !sidebarCollapsed"><template #icon><NIcon :component="sidebarCollapsed ? ChevronForwardOutline : ChevronBackOutline" /></template></NButton></template>
           {{ sidebarCollapsed ? "展开会话侧栏" : "收起会话侧栏，专注当前对话" }} · Ctrl+Shift+B

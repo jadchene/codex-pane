@@ -59,6 +59,15 @@ describe("ItemCard compact structured views", () => {
     expect(wrapper.text()).not.toContain("运行详情");
   });
 
+  it("renders protocol notices as readable alerts", () => {
+    const wrapper = mount(ItemCard, { props: { item: item("protocolNotice", { title: "模型已切换", message: "gpt-5 → safety", tone: "warning", details: "安全原因 Bearer very-secret-token" }) } });
+    expect(wrapper.text()).toContain("模型已切换");
+    expect(wrapper.text()).toContain("gpt-5 → safety");
+    expect(wrapper.text()).toContain("安全原因");
+    expect(wrapper.text()).not.toContain("very-secret-token");
+    expect(wrapper.find(".protocol-notice").exists()).toBe(true);
+  });
+
   it("renders status, MCP status, and skills as compact named fields", () => {
     const status = mount(ItemCard, { props: { item: item("status", { connection: "已连接", account: "API 模式", cwd: "E:\\Work" }) } });
     expect(status.text()).toContain("当前状态");

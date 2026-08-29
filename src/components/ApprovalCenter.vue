@@ -67,10 +67,6 @@ const requestedFileChanges = computed(() => {
   return Object.entries(asRecord(params.value.fileChanges)).map(([path, change]) => ({ path, change: asRecord(change) }));
 });
 const requestedCommandActions = computed(() => Array.isArray(params.value.commandActions) ? params.value.commandActions.map(asRecord) : []);
-const commandActionLabel = (action: Record<string, unknown>): string => {
-  const kind = ({ read: "读取文件", listFiles: "列出文件", search: "搜索内容", unknown: "执行命令" } as Record<string, string>)[String(action.type)] ?? "执行命令";
-  return `${kind}：${String(action.path ?? action.query ?? action.name ?? action.command ?? "未提供详情")}`;
-};
 const fileChangeLabel = (change: Record<string, unknown>): string => ({ add: "新增", delete: "删除", update: "修改" }[String(change.type)] ?? "变更");
 const redactForDisplay = (value: unknown, key = "", depth = 0): unknown => {
   if (/(token|authorization|api.?key|password|secret)/i.test(key)) return "[已隐藏]";
@@ -80,15 +76,31 @@ const redactForDisplay = (value: unknown, key = "", depth = 0): unknown => {
   if (typeof value === "string") return value.replace(/Bearer\s+\S+/gi, "Bearer [已隐藏]").replace(/sk-[A-Za-z0-9_-]{12,}/g, "sk-[已隐藏]");
   return value;
 };
+const commandActionLabel = (action: Record<string, unknown>): string => {
+  const kind = ({ read: "读取文件", listFiles: "列出文件", search: "搜索内容", unknown: "执行命令" } as Record<string, string>)[String(action.type)] ?? "执行命令";
+  return `${kind}：${String(redactForDisplay(action.path ?? action.query ?? action.name ?? action.command ?? "未提供详情"))}`;
+};
 const safeJson = (value: unknown): string => JSON.stringify(redactForDisplay(value), null, 2);
 const displayPath = (value: unknown): string => typeof value === "string" ? value : safeJson(value);
+const shellArgument = (value: unknown): string => {
+  const argument = String(redactForDisplay(value));
+  return /[\s"']/u.test(argument) ? `"${argument.replaceAll('"', '\\"')}"` : argument;
+};
+const commandDisplay = computed(() => Array.isArray(params.value.command)
+  ? params.value.command.map(shellArgument).join(" ")
+  : String(redactForDisplay(params.value.command ?? "")));
 
 const decisionLabel = (decision: unknown): string => {
   if (decision === "accept") return "允许一次";
   if (decision === "acceptForSession") return "本次会话允许";
   if (decision === "decline") return "拒绝";
   if (decision === "cancel") return "拒绝并中断";
-  if (typeof decision === "object") return "按建议策略允许";
+  if (typeof decision === "object") {
+    const detail = asRecord(decision);
+    if (detail.acceptWithExecpolicyAmendment) return "允许并记住命令规则";
+    if (detail.applyNetworkPolicyAmendment) return "允许并应用网络规则";
+    return "按建议策略允许";
+  }
   return String(decision);
 };
 
@@ -270,7 +282,7 @@ const openElicitationUrl = async (): Promise<void> => {
         <NSpace vertical :size="10">
           <NDescriptions bordered :column="1" size="small" label-placement="left">
             <NDescriptionsItem v-if="params.reason" label="原因">{{ params.reason }}</NDescriptionsItem>
-            <NDescriptionsItem v-if="params.command" label="命令"><NCode :code="String(params.command)" language="powershell" word-wrap /></NDescriptionsItem>
+            <NDescriptionsItem v-if="params.command" label="命令"><NCode :code="commandDisplay" language="powershell" word-wrap /></NDescriptionsItem>
             <NDescriptionsItem v-if="params.cwd" label="工作目录">{{ params.cwd }}</NDescriptionsItem>
             <NDescriptionsItem v-if="params.serverName" label="MCP 服务">{{ params.serverName }}</NDescriptionsItem>
             <NDescriptionsItem v-if="params.tool" label="工具">{{ params.tool }}</NDescriptionsItem>
@@ -296,7 +308,7 @@ const openElicitationUrl = async (): Promise<void> => {
               </NFormItem>
             </NForm>
             <NAlert v-if="formError" type="error">{{ formError }}</NAlert>
-            <NButton v-if="!choiceOnlyQuestions" type="primary" @click="submitAnswers">提交回答</NButton>
+            <div v-if="!choiceOnlyQuestions" class="approval-actions"><NButton type="primary" @click="submitAnswers">提交回答</NButton></div>
           </template>
 
           <template v-else-if="activeRequest.method === 'mcpServer/elicitation/request'">
@@ -316,7 +328,7 @@ const openElicitationUrl = async (): Promise<void> => {
               <NInput v-model:value="formJson" type="textarea" :input-props="noSpellcheckInputProps" :autosize="{ minRows: 5, maxRows: 14 }" />
             </NFormItem>
             <NAlert v-if="formError" type="error">{{ formError }}</NAlert>
-            <NSpace v-if="!singleChoiceElicitation">
+            <NSpace v-if="!singleChoiceElicitation" class="approval-actions">
               <NButton type="primary" @click="submitElicitation('accept')">{{ params.mode === 'url' ? '已完成，继续' : '提交' }}</NButton>
               <NButton type="error" secondary @click="submitElicitation('decline')">拒绝</NButton>
               <NButton @click="submitElicitation('cancel')">取消</NButton>
@@ -334,7 +346,7 @@ const openElicitationUrl = async (): Promise<void> => {
               <NCheckbox v-if="(params.permissions as Record<string, unknown>)?.network" v-model:checked="permissionSelection.network">允许请求的网络范围</NCheckbox>
               <NCheckbox v-if="(params.permissions as Record<string, unknown>)?.fileSystem" v-model:checked="permissionSelection.fileSystem">允许请求的文件范围</NCheckbox>
             </NSpace>
-            <NSpace>
+            <NSpace class="approval-actions">
               <NButton type="primary" @click="acceptPermissions('turn')">本轮允许</NButton>
               <NButton type="warning" secondary @click="acceptPermissions('session')">本会话允许</NButton>
               <NButton type="error" secondary @click="emit('resolve', activeRequest, { permissions: {}, scope: 'turn' })">拒绝</NButton>
@@ -351,7 +363,7 @@ const openElicitationUrl = async (): Promise<void> => {
               <div v-if="params.proposedExecpolicyAmendment"><strong>命令规则：</strong>{{ safeJson(params.proposedExecpolicyAmendment) }}</div>
               <div v-for="(amendment, index) in (params.proposedNetworkPolicyAmendments as unknown[] ?? [])" :key="`network-${index}`"><strong>网络规则：</strong>{{ (amendment as Record<string, unknown>).action }} {{ (amendment as Record<string, unknown>).host }}</div>
             </div>
-            <NSpace>
+            <NSpace class="approval-actions">
               <NButton v-for="(decision, index) in availableDecisions" :key="index" :type="decisionType(decision)" :secondary="decision !== 'accept'" @click="resolveDecision(decision)">
                 {{ decisionLabel(decision) }}
               </NButton>
@@ -361,7 +373,7 @@ const openElicitationUrl = async (): Promise<void> => {
           <template v-else>
             <NAlert type="error">此版本未注册该客户端能力。为避免未经确认的外部操作，请安全拒绝。</NAlert>
             <pre class="request-json">{{ safeJson(params) }}</pre>
-            <NButton type="error" secondary @click="rejectUnsupported">安全拒绝此请求</NButton>
+            <div class="approval-actions"><NButton type="error" secondary @click="rejectUnsupported">安全拒绝此请求</NButton></div>
           </template>
 
         </NSpace>

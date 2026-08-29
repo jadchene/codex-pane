@@ -27,6 +27,7 @@ describe("SessionSidebar", () => {
     vi.spyOn(store, "scheduleSave").mockImplementation(() => undefined);
     const newSidebarThread = vi.spyOn(store, "newSidebarThread");
     const wrapper = mount(SessionSidebar, { props: { pane: store.state.panes[0]! }, global: { plugins: [pinia] } });
+    document.body.appendChild(wrapper.element);
 
     expect(wrapper.find(".session-sidebar-header").exists()).toBe(false);
     expect(wrapper.get(".session-new-button").classes()).not.toContain("n-button--block-type");
@@ -45,6 +46,13 @@ describe("SessionSidebar", () => {
     expect(store.state.focusedPaneId).toBe("pane-2");
     expect(store.state.panes[1]!.unread).toBe(false);
     expect(wrapper.find(".session-unread-dot").exists()).toBe(false);
+
+    const sessionButtons = wrapper.findAll(".session-item-button");
+    (sessionButtons[0]!.element as HTMLButtonElement).focus();
+    await sessionButtons[0]!.trigger("keydown", { key: "ArrowDown" });
+    expect(document.activeElement).toBe(sessionButtons[1]!.element);
+    await sessionButtons[1]!.trigger("keydown", { key: "Escape" });
+    expect(wrapper.emitted("focusConversation")).toHaveLength(1);
 
     wrapper.getComponent(SessionListPanel).vm.$emit("newSession");
     await vi.waitFor(() => expect(newSidebarThread).toHaveBeenCalledWith(store.state.panes[1]));

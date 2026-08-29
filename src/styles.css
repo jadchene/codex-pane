@@ -112,8 +112,8 @@ body :is(.n-dropdown-menu, .n-base-select-menu) { border: 1px solid var(--app-co
 .attachment-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .86em; }
 .status-line { display: flex; min-width: 0; align-items: center; flex-wrap: wrap; column-gap: 7px; row-gap: 3px; min-height: 29px; overflow: visible; padding-block: 2px; border-top: 1px solid var(--app-border, #242424); color: var(--app-muted, #888); font-size: .86em; background: var(--app-surface, #000); }
 .status-line > span, .status-line > button { flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.status-action { padding: 0; border: 0; color: inherit; background: transparent; font: inherit; text-decoration: underline; text-decoration-color: transparent; text-underline-offset: 3px; }
-.status-action:hover, .status-action:focus-visible { color: var(--app-text, #fff); text-decoration-color: currentColor; }
+.status-action { padding: 1px 5px; border: 1px solid color-mix(in srgb, var(--app-control-border, #4a4a4a) 65%, transparent); border-radius: 999px; color: inherit; background: color-mix(in srgb, var(--app-raised, #0b0b0b) 75%, transparent); font: inherit; }
+.status-action:hover, .status-action:focus-visible { border-color: var(--app-accent, #10a37f); color: var(--app-text, #fff); background: color-mix(in srgb, var(--app-accent, #10a37f) 10%, var(--app-raised, #0b0b0b)); outline: none; }
 .inline-detail-fields { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 18px; margin-top: 6px; }
 .inline-detail-field { display: inline-flex; min-width: 0; align-items: baseline; }
 .inline-detail-field > :last-child { min-width: 0; overflow-wrap: anywhere; }
@@ -135,9 +135,10 @@ body .composer-option-usage { padding: 1px 5px; border-radius: 4px; color: var(-
 body .composer-rich-option { display: grid; min-width: min(420px, calc(100vw - 48px)); max-width: min(680px, calc(100vw - 32px)); gap: 2px; }
 body .composer-rich-option strong, body .composer-rich-option span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 body .composer-rich-option span { color: var(--app-muted, #888); font-size: .9em; }
+body .composer-options-menu .slash-option-active { border-left: 2px solid var(--app-accent, #10a37f); background: color-mix(in srgb, var(--app-accent, #10a37f) 14%, var(--app-raised, #0b0b0b)); }
 
 .inline-approval { max-height: min(42vh, 360px); overflow: auto; padding: 8px; border: 1px solid var(--app-accent, #10a37f); border-radius: 8px; background: var(--app-raised, #0b0b0b); box-shadow: 0 -8px 28px rgb(0 0 0 / 24%); }
-.inline-approval-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+.inline-approval-header { position: sticky; z-index: 3; top: -8px; display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; padding: 8px 0 6px; border-bottom: 1px solid var(--app-border, #242424); background: var(--app-raised, #0b0b0b); }
 .inline-approval-header strong { font-size: 1.08em; }
 .inline-approval-meta { display: flex; align-items: center; gap: 8px; }
 .inline-approval .n-descriptions { font-size: .93em; }
@@ -149,6 +150,9 @@ body .composer-rich-option span { color: var(--app-muted, #888); font-size: .9em
 .approval-option-description { color: var(--app-muted, #888); font-size: .92em; }
 .approval-risk-summary { display: grid; gap: 5px; padding: 8px 10px; border: 1px solid var(--app-border, #242424); border-radius: 6px; background: var(--app-surface, #050505); overflow-wrap: anywhere; }
 .approval-risk-summary strong { color: var(--app-text, #fff); }
+.approval-actions { position: sticky; z-index: 2; bottom: -8px; width: 100%; padding: 7px 0 8px; border-top: 1px solid var(--app-border, #242424); background: var(--app-raised, #0b0b0b); }
+.protocol-notice { max-width: min(900px, 100%); }
+.protocol-notice-details { margin: 5px 0 0; overflow-wrap: anywhere; white-space: pre-wrap; color: inherit; font: .9em/1.45 var(--app-font-family); opacity: .82; }
 .auto-review-indicator { color: var(--app-accent, #10a37f); }
 .context-usage-warning { color: #e4a853; }
 .context-usage-critical { color: #e05b64; font-weight: 600; }

@@ -51,7 +51,9 @@ The remaining manifest client methods are platform capabilities not implemented 
 | Token/rate-limit updates | Context warning thresholds and rate-limit labels in the status line |
 | Settings/name/goal changes | Persistent pane state plus a compact conversation card when the change is meaningful |
 | Auto-approval review | Risk, authorization judgment, rationale and action summary card; strict review becomes a visible approval state |
-| MCP/login/config warnings | Recoverable top-level notice with service-specific copy |
+| MCP/login/global config warnings | Recoverable top-level notice with service-specific copy |
+| Thread warnings, model reroute/verification/safety checks | Readable, bounded conversation notice; consecutive updates for the same turn and topic coalesce instead of creating a card flood |
+| Environment connection lifecycle | Disconnect and reconnect notices in the affected conversation; the ordinary initial connection is silent |
 | Unknown future item type | Generic protocol card labelled with the concrete item type, localized status, bounded/redacted detail fields |
 | Transport-only or unrelated platform events | Silent state synchronization, or ignored when Codex Pane did not subscribe to that feature |
 
@@ -65,7 +67,7 @@ The remaining manifest client methods are platform capabilities not implemented 
 
 Supported commands: `/agents`, `/cd`, `/compact`, `/fast`, `/goal`, `/mcp`, `/new`, `/permissions`, `/plan`, `/ps`, `/rename`, `/resume`, `/review`, `/skills`, `/status`, `/stop`. Legacy aliases remain accepted by the store but are not duplicated in the menu.
 
-Composer behavior follows terminal expectations: `Enter` sends, `Shift+Enter` inserts a newline, Up/Down at the text boundary recalls submitted prompts while preserving the current draft, and an empty Down still returns the transcript to the latest item.
+Composer behavior follows terminal expectations: `Enter` sends only when the visible Send/Append action is enabled, `Shift+Enter` inserts a newline, Up/Down at the text boundary recalls submitted prompts while preserving the current draft, and an empty Down still returns the transcript to the latest item. History survives switching workspace modes through a bounded in-memory cache and is not persisted to disk.
 
 ## Workspace keyboard model
 
@@ -76,5 +78,7 @@ Composer behavior follows terminal expectations: `Enter` sends, `Shift+Enter` in
 | `Ctrl+Shift+M` | Switch without data loss between multi-pane and session-sidebar modes |
 | `Ctrl+Shift+B` | Collapse or expand the session sidebar |
 | `Ctrl+Shift+L` | Open the sidebar and focus session search |
+| Session list `↑` / `↓`, `Home` / `End` | Move through sessions without leaving the list |
+| Session list `Esc` | Return focus to the active conversation |
 
 Pane numbers are displayed only in multi-pane headers. The session-sidebar mode preserves the active conversation and all background panes, so switching modes does not unsubscribe or discard work.

@@ -177,7 +177,7 @@ const humanizeType = (value: string): string => value
 const title = computed(() => ({
   reasoning: "思考摘要", commandExecution: "命令执行", fileChange: "文件变更", mcpToolCall: "MCP 工具", dynamicToolCall: "工具调用",
   collabAgentToolCall: "协作代理", subAgentActivity: "代理活动", agents: "协作代理", backgroundProcesses: "后台进程", webSearch: "网络搜索", imageView: "查看图片", imageGeneration: "生成图片",
-  enteredReviewMode: "开始审查", exitedReviewMode: "审查完成", contextCompaction: "上下文压缩", plan: "计划", status: "当前状态", mcpStatus: "MCP 状态", skills: "可用技能"
+  enteredReviewMode: "开始审查", exitedReviewMode: "审查完成", contextCompaction: "上下文压缩", plan: "计划", status: "当前状态", mcpStatus: "MCP 状态", skills: "可用技能", protocolNotice: "Codex 通知"
 }[props.item.type] ?? `协议事件 · ${humanizeType(props.item.type) || "未知类型"}`));
 const statusLabel = computed(() => {
   const status = String(record.value.status ?? props.item.status);
@@ -478,6 +478,11 @@ const copyText = async (value: string): Promise<void> => {
   <NCard v-else-if="item.type === 'status'" size="small" class="tool-card item-card" :content-style="compactContentStyle" :header-style="compactHeaderStyle" title="当前状态">
     <div class="inline-detail-fields"><span v-for="field in statusFields" :key="field.key" class="inline-detail-field"><NText depth="3">{{ field.label }}：</NText><span>{{ shortenedText(field.value, 500) }}</span></span></div>
   </NCard>
+
+  <NAlert v-else-if="item.type === 'protocolNotice'" class="item-card protocol-notice" :type="record.tone === 'error' ? 'error' : record.tone === 'info' ? 'info' : 'warning'" :title="String(record.title ?? 'Codex 通知')" :show-icon="true">
+    <div>{{ textValue(record.message) }}</div>
+    <pre v-if="record.details" class="protocol-notice-details">{{ shortenedText(record.details, 2000) }}</pre>
+  </NAlert>
 
   <NCard v-else-if="item.type === 'permissions'" size="small" class="tool-card item-card" :content-style="compactContentStyle" :header-style="compactHeaderStyle" title="权限模式">
     <template #header-extra><NButton quaternary circle size="small" aria-label="关闭权限选择" @click="emit('action', { type: 'dismissItem', itemId: item.id })">×</NButton></template>
