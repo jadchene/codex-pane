@@ -126,6 +126,22 @@ test("keeps the longest-session shape smooth across six panes", async () => {
     expect(upwardScroll.end).toBeLessThan(upwardScroll.start - 1_000);
     expect(upwardScroll.retainedBelowViewport).toBeGreaterThan(100);
 
+    const downwardScroll = await window.locator(".pane-output").first().evaluate(async (element) => {
+      let previous = element.scrollTop;
+      let reversals = 0;
+      for (let frame = 0; frame < 80; frame += 1) {
+        element.dispatchEvent(new WheelEvent("wheel", { deltaY: 120 }));
+        element.scrollTop = Math.min(element.scrollHeight, element.scrollTop + 120);
+        await new Promise<void>((resolveFrame) => requestAnimationFrame(() => resolveFrame()));
+        if (element.scrollTop < previous - 1) reversals += 1;
+        previous = element.scrollTop;
+        if (element.scrollHeight - element.clientHeight - element.scrollTop <= 1) break;
+      }
+      return { reversals, gap: element.scrollHeight - element.clientHeight - element.scrollTop };
+    });
+    expect(downwardScroll.reversals).toBe(0);
+    expect(downwardScroll.gap).toBeLessThanOrEqual(1.1);
+
     const idleFrames = await frameMetrics(window, false);
     process.stdout.write(`[performance:idle] ${JSON.stringify(idleFrames)}\n`);
     const scrollFrames = await frameMetrics(window, true);

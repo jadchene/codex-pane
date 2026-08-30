@@ -120,4 +120,24 @@ describe("VirtualList", () => {
 
     expect(scroller.scrollTop).toBe(6_020);
   });
+
+  it("settles at the bottom when downward scrolling reaches the final small gap", async () => {
+    const items = Array.from({ length: 100 }, (_, index) => ({ id: `item-${index}`, text: `message ${index}` }));
+    const wrapper = mount(VirtualList, {
+      props: { items, itemKey: (item: unknown) => (item as { id: string }).id, estimateSize: () => 64, followTail: true },
+      slots: { default: ({ item }: { item: unknown }) => h("article", { class: "virtual-row" }, (item as { text: string }).text) }
+    });
+    const scroller = wrapper.element as HTMLElement;
+    Object.defineProperty(scroller, "clientHeight", { configurable: true, value: 320 });
+    Object.defineProperty(scroller, "scrollHeight", { configurable: true, value: 6_400 });
+    scroller.scrollTop = 5_900;
+    scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -60 }));
+    scroller.dispatchEvent(new Event("scroll"));
+    scroller.scrollTop = 6_060;
+    scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: 120 }));
+    scroller.dispatchEvent(new Event("scroll"));
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 20));
+
+    expect(scroller.scrollTop).toBe(6_400);
+  });
 });

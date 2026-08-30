@@ -12,6 +12,9 @@ const props = withDefaults(defineProps<{
 const emit = defineEmits<{ scroll: [event: Event] }>();
 defineSlots<{ default: (props: { item: TItem; index: number }) => unknown; before?: () => unknown; empty?: () => unknown }>();
 
+const TAIL_GAP_EPSILON = 2;
+const TAIL_SNAP_DISTANCE = 32;
+
 class FenwickTree {
   readonly values: number[];
   readonly tree: number[];
@@ -110,7 +113,7 @@ const updateRange = (): void => {
     return;
   }
   const overscan = Math.max(props.buffer, element.clientHeight);
-  const viewportTop = followsTail() ? Math.max(0, sizes.total() - element.clientHeight) : element.scrollTop;
+  const viewportTop = element.scrollTop;
   const start = sizes.indexAt(Math.max(0, viewportTop - overscan));
   const end = followsTail()
     ? props.items.length
@@ -170,8 +173,12 @@ const setScrollTop = (element: HTMLElement, position: number): void => {
 const handleScroll = (event: Event): void => {
   const element = event.currentTarget as HTMLElement;
   const gap = element.scrollHeight - element.scrollTop - element.clientHeight;
-  if (gap <= 2) tailDetached = false;
-  else if (element.scrollTop < lastScrollTop - 0.5) tailDetached = true;
+  const movedTowardTail = element.scrollTop > lastScrollTop + 0.5;
+  if (gap <= TAIL_GAP_EPSILON) tailDetached = false;
+  else if (movedTowardTail && gap <= TAIL_SNAP_DISTANCE) {
+    tailDetached = false;
+    scheduleTailPin(true);
+  } else if (element.scrollTop < lastScrollTop - 0.5) tailDetached = true;
   lastScrollTop = element.scrollTop;
   scheduleRangeUpdate();
   emit("scroll", event);
@@ -189,7 +196,7 @@ const scrollToBottom = (force = true): void => {
 };
 const scrollToPosition = (position: number): void => {
   if (!scroller.value) return;
-  tailDetached = scroller.value.scrollHeight - position - scroller.value.clientHeight >= 2;
+  tailDetached = scroller.value.scrollHeight - position - scroller.value.clientHeight >= TAIL_GAP_EPSILON;
   setScrollTop(scroller.value, Math.max(0, position));
   lastScrollTop = scroller.value.scrollTop;
   scheduleRangeUpdate();

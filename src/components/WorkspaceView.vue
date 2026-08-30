@@ -1,8 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from "vue";
 import type { ComponentPublicInstance } from "vue";
-import { NButton, NIcon, NTooltip } from "naive-ui";
-import { ChevronBackOutline, ChevronForwardOutline } from "@vicons/ionicons5";
 import { Pane, Splitpanes } from "splitpanes";
 import "splitpanes/dist/splitpanes.css";
 import { useWorkspaceStore } from "../stores/workspace";
@@ -10,11 +8,11 @@ import PaneHost from "./PaneHost.vue";
 import SessionSidebar from "./SessionSidebar.vue";
 
 const emit = defineEmits<{ openSessions: [paneId: string] }>();
+const sidebarCollapsed = defineModel<boolean>("sidebarCollapsed", { default: false });
 const store = useWorkspaceStore();
 type PaneHostInstance = ComponentPublicInstance & { focusComposer: () => void };
 const paneHosts = ref<Record<number, PaneHostInstance | null>>({});
 const sessionSidebar = ref<InstanceType<typeof SessionSidebar> | null>(null);
-const sidebarCollapsed = ref(false);
 const visiblePaneCount = computed(() => ({ single: 1, vertical: 2, horizontal: 2, quad: 4, fourColumns: 4, fourRows: 4, six: 6 })[store.state.layout]);
 const sessionPaneIndex = computed(() => {
   const index = store.state.panes.findIndex((pane) => pane.id === store.state.focusedPaneId);
@@ -90,10 +88,6 @@ defineExpose({ focusPaneById, focusSessionList });
     <div v-if="store.state.workspaceMode === 'sessionSidebar'" class="session-workspace" :class="{ 'session-workspace-sidebar-collapsed': sidebarCollapsed }">
       <div class="session-sidebar-shell">
         <SessionSidebar v-if="!sidebarCollapsed" ref="sessionSidebar" :pane="sessionPane" @activate-pane="focusPaneById" @focus-conversation="focusPane(sessionPaneIndex)" />
-        <NTooltip placement="right">
-          <template #trigger><NButton quaternary circle size="small" class="session-sidebar-collapse" aria-keyshortcuts="Control+Shift+B" :aria-label="sidebarCollapsed ? '展开会话侧栏' : '收起会话侧栏'" @click="sidebarCollapsed = !sidebarCollapsed"><template #icon><NIcon :component="sidebarCollapsed ? ChevronForwardOutline : ChevronBackOutline" /></template></NButton></template>
-          {{ sidebarCollapsed ? "展开会话侧栏" : "收起会话侧栏，专注当前对话" }} · Ctrl+Shift+B
-        </NTooltip>
       </div>
       <div class="session-workspace-pane">
         <PaneHost :ref="instance => setPaneHost(sessionPaneIndex, instance)" :index="sessionPaneIndex" include-global-requests @open-sessions="emit('openSessions', $event)" />

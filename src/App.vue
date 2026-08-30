@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watchEffect } from "vue";
 import { darkTheme, dateZhCN, NAlert, NButton, NButtonGroup, NCheckbox, NConfigProvider, NDialogProvider, NDropdown, NIcon, NLayout, NLayoutHeader, NMessageProvider, NModal, NSpace, NSpin, NText, NTooltip, zhCN } from "naive-ui";
-import { CloseOutline, GridOutline, ListOutline, ReloadOutline, ScanOutline, SettingsOutline } from "@vicons/ionicons5";
+import { ChevronBackOutline, ChevronForwardOutline, CloseOutline, GridOutline, ListOutline, ReloadOutline, ScanOutline, SettingsOutline } from "@vicons/ionicons5";
 import hljs from "highlight.js/lib/core";
 import powershell from "highlight.js/lib/languages/powershell";
 import { useWorkspaceStore } from "./stores/workspace";
@@ -16,6 +16,7 @@ hljs.registerLanguage("powershell", powershell);
 const appIconUrl = new URL("../assets/icon.svg", import.meta.url).href;
 const fullScreen = ref(false);
 const maximized = ref(false);
+const sessionSidebarCollapsed = ref(false);
 const sessionsOpen = ref(false);
 const sessionsShowAll = ref(false);
 const sessionsLoading = ref(false);
@@ -263,19 +264,24 @@ onUnmounted(() => {
         <div class="app-root" :class="{ 'app-root-fullscreen': fullScreen }" :style="appearanceStyle">
           <NLayout class="app-shell">
             <NLayoutHeader v-if="!fullScreen" class="topbar custom-titlebar" bordered>
-              <div class="titlebar-identity"><img :src="appIconUrl" alt="" /><span>Codex Pane</span><NTooltip><template #trigger><span class="titlebar-status" :class="`titlebar-status-${connectionStatus.tone}`" role="status"><i />{{ connectionStatus.label }}</span></template>{{ store.state.connection.message }}<template v-if="store.state.connection.codexVersion"> · Codex {{ store.state.connection.codexVersion }}</template></NTooltip></div>
+              <div class="titlebar-identity"><img :src="appIconUrl" alt="" /><span>Codex Pane</span></div>
               <div class="titlebar-drag-region" aria-hidden="true" />
               <div class="titlebar-actions">
                 <NButtonGroup class="workspace-mode-switch" size="tiny" aria-label="工作台模式">
                   <NTooltip><template #trigger><NButton :type="store.state.workspaceMode === 'panes' ? 'primary' : 'default'" :secondary="store.state.workspaceMode === 'panes'" aria-label="切换到多窗格模式" @click="selectWorkspaceMode('panes')"><template #icon><NIcon :component="GridOutline" /></template><span class="workspace-mode-label">多窗格</span></NButton></template>并行查看多个任务 · Ctrl+Shift+M</NTooltip>
                   <NTooltip><template #trigger><NButton :type="store.state.workspaceMode === 'sessionSidebar' ? 'primary' : 'default'" :secondary="store.state.workspaceMode === 'sessionSidebar'" aria-label="切换到会话侧栏模式" @click="selectWorkspaceMode('sessionSidebar')"><template #icon><NIcon :component="ListOutline" /></template><span class="workspace-mode-label">会话</span></NButton></template>集中浏览历史会话 · Ctrl+Shift+M</NTooltip>
                 </NButtonGroup>
+                <NTooltip v-if="store.state.workspaceMode === 'sessionSidebar'">
+                  <template #trigger><NButton quaternary circle size="small" aria-keyshortcuts="Control+Shift+B" :aria-label="sessionSidebarCollapsed ? '展开会话列表' : '收起会话列表'" @click="sessionSidebarCollapsed = !sessionSidebarCollapsed"><template #icon><NIcon :component="sessionSidebarCollapsed ? ChevronForwardOutline : ChevronBackOutline" /></template></NButton></template>
+                  {{ sessionSidebarCollapsed ? "展开会话列表" : "收起会话列表" }} · Ctrl+Shift+B
+                </NTooltip>
                 <NTooltip><template #trigger><NButton quaternary circle size="small" aria-label="设置" @click="settingsOpen = true"><template #icon><NIcon :component="SettingsOutline" /></template></NButton></template>设置</NTooltip>
                 <NDropdown v-if="store.state.workspaceMode === 'panes'" trigger="click" :options="layoutOptions" @select="selectLayout">
                   <NButton quaternary circle size="small" :aria-label="`切换窗格布局，当前${layoutLabels[store.state.layout]}`"><template #icon><NIcon :component="GridOutline" /></template></NButton>
                 </NDropdown>
                 <NTooltip><template #trigger><NButton quaternary circle size="small" aria-label="重新连接 app-server" :loading="store.state.connection.phase === 'starting' || store.state.connection.phase === 'restarting'" :disabled="store.state.connection.phase === 'starting' || store.state.connection.phase === 'restarting'" @click="requestReconnect"><template #icon><NIcon :component="ReloadOutline" /></template></NButton></template>重新连接 app-server</NTooltip>
                 <NTooltip><template #trigger><NButton quaternary circle size="small" :aria-label="fullScreen ? '退出全屏' : '全屏'" @click="toggleFullScreen"><template #icon><NIcon :component="ScanOutline" /></template></NButton></template>{{ fullScreen ? "退出全屏" : "全屏" }} · F11</NTooltip>
+                <NTooltip><template #trigger><span class="titlebar-status" :class="`titlebar-status-${connectionStatus.tone}`" role="status"><i />{{ connectionStatus.label }}</span></template>{{ store.state.connection.message }}<template v-if="store.state.connection.codexVersion"> · Codex {{ store.state.connection.codexVersion }}</template></NTooltip>
               </div>
               <div class="window-controls">
                 <NButton quaternary class="window-control" aria-label="最小化" @click="controlWindow('minimize')"><span class="window-glyph window-glyph-minimize" /></NButton>
@@ -290,7 +296,7 @@ onUnmounted(() => {
             <NAlert v-else-if="store.state.notices.length" type="warning" class="connection-alert" closable @close="store.dismissNotice"><div class="connection-alert-content"><span>{{ store.state.notices.at(-1) }}<small v-if="store.state.notices.length > 1"> · 另有 {{ store.state.notices.length - 1 }} 条通知</small></span><NButton v-if="store.state.notices.length > 1" size="tiny" secondary @click="store.dismissAllNotices">全部清除</NButton></div></NAlert>
 
             <NSpin :show="!store.state.initialized" description="正在恢复工作台…" class="workspace-spin">
-              <WorkspaceView ref="workspaceView" @open-sessions="openSessions" />
+              <WorkspaceView ref="workspaceView" v-model:sidebar-collapsed="sessionSidebarCollapsed" @open-sessions="openSessions" />
             </NSpin>
           </NLayout>
 
@@ -340,7 +346,7 @@ onUnmounted(() => {
 .custom-titlebar { position: relative; display: flex; box-sizing: border-box; align-items: center; justify-content: flex-end; height: 42px; padding: 0; user-select: none; -webkit-app-region: drag; }
 .titlebar-identity { display: flex; min-width: 0; align-items: center; gap: 8px; padding-left: 10px; color: var(--app-text); font-size: .86em; font-weight: 600; }
 .titlebar-identity img { width: 18px; height: 18px; }
-.titlebar-status { display: inline-flex; align-items: center; gap: 5px; margin-left: 4px; color: var(--app-muted); font-size: .86em; font-weight: 500; }
+.titlebar-status { display: inline-flex; height: 100%; align-items: center; gap: 5px; padding: 0 6px; color: var(--app-muted); font-size: .86em; font-weight: 500; }
 .titlebar-status i { width: 7px; height: 7px; border-radius: 50%; background: var(--app-muted); }
 .titlebar-status-ready i { background: #35c98b; box-shadow: 0 0 0 3px color-mix(in srgb, #35c98b 15%, transparent); }
 .titlebar-status-working i { background: #e4a853; animation: connection-pulse 1.2s ease-in-out infinite; }

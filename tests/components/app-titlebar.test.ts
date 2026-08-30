@@ -48,6 +48,8 @@ describe("App titlebar", () => {
     expect(titlebar.text()).toContain("已连接");
     expect(titlebar.text()).not.toContain("版本未验证");
     expect(titlebar.text()).not.toContain("API 模式");
+    expect(titlebar.get(".titlebar-identity").text()).toBe("Codex Pane");
+    expect(titlebar.get(".titlebar-actions").text()).toContain("已连接");
     const layoutButton = titlebar.get('button[aria-label="切换窗格布局，当前单窗格"]');
     expect(layoutButton.text()).toBe("");
     expect(titlebar.get(".titlebar-identity img").attributes("src")).toMatch(/^(?:data:image\/svg\+xml|.+icon\.svg)/);
@@ -145,6 +147,8 @@ describe("App titlebar", () => {
     expect(store.state.layout).toBe("quad");
     expect(store.state.panes[1]!.threadId).toBe("thread-idle");
     expect(wrapper.findComponent(NDropdown).exists()).toBe(false);
+    await wrapper.get('button[aria-label="收起会话列表"]').trigger("click");
+    expect(wrapper.get('button[aria-label="展开会话列表"]')).toBeTruthy();
 
     window.dispatchEvent(new KeyboardEvent("keydown", { key: "m", ctrlKey: true, shiftKey: true }));
     await wrapper.vm.$nextTick();

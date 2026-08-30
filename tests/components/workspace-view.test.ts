@@ -86,12 +86,10 @@ describe("WorkspaceView focus navigation", () => {
     expect(wrapper.get("[data-test-pane]").attributes("data-test-pane")).toBe("1");
     expect(wrapper.get("[data-test-pane]").attributes("data-global-requests")).toBe("true");
     expect(wrapper.get("main").classes()).toContain("workspace-mode-sessionSidebar");
-    await wrapper.get('button[aria-label="收起会话侧栏"]').trigger("click");
-    expect(wrapper.get(".session-workspace").classes()).toContain("session-workspace-sidebar-collapsed");
-    expect(wrapper.find("[data-test-sidebar]").exists()).toBe(false);
-    await wrapper.get('button[aria-label="展开会话侧栏"]').trigger("click");
-    expect(wrapper.find("[data-test-sidebar]").exists()).toBe(true);
     await wrapper.get("main").trigger("keydown", { key: "b", ctrlKey: true, shiftKey: true });
     expect(wrapper.get(".session-workspace").classes()).toContain("session-workspace-sidebar-collapsed");
+    expect(wrapper.find("[data-test-sidebar]").exists()).toBe(false);
+    await wrapper.get("main").trigger("keydown", { key: "b", ctrlKey: true, shiftKey: true });
+    expect(wrapper.find("[data-test-sidebar]").exists()).toBe(true);
   });
 });

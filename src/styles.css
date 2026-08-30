@@ -167,11 +167,10 @@ body .composer-options-menu .slash-option-active { border-left: 2px solid var(--
 .session-pane-header { display: flex; min-height: 42px; flex: 0 0 42px; align-items: center; justify-content: space-between; padding: 5px 10px 5px 14px; border-bottom: 1px solid var(--app-border, #242424); background: var(--app-surface, #000); }
 .session-drawer-error { flex: 0 0 auto; margin: 0 10px 10px; }
 .session-workspace { display: grid; width: 100%; height: 100%; min-width: 0; min-height: 0; grid-template-columns: clamp(240px, 22vw, 320px) minmax(0, 1fr); background: var(--app-bg, #000); transition: grid-template-columns .18s ease; }
-.session-workspace-sidebar-collapsed { grid-template-columns: 42px minmax(0, 1fr); }
+.session-workspace-sidebar-collapsed { grid-template-columns: 0 minmax(0, 1fr); }
 .session-sidebar-shell { position: relative; min-width: 0; min-height: 0; border-right: 1px solid var(--app-border, #242424); background: var(--app-surface, #000); }
 .session-sidebar-shell > .session-sidebar { height: 100%; border-right: 0; }
-.session-sidebar-collapse { position: absolute; z-index: 5; top: 8px; right: -15px; border: 1px solid var(--app-border, #242424) !important; background: var(--app-surface, #000) !important; box-shadow: 0 4px 14px rgb(0 0 0 / 20%); }
-.session-workspace-sidebar-collapsed .session-sidebar-collapse { right: 5px; }
+.session-workspace-sidebar-collapsed .session-sidebar-shell { border-right: 0; }
 .session-workspace-pane { min-width: 0; min-height: 0; }
 .session-workspace-pane > .pane { height: 100%; }
 .session-sidebar { display: flex; min-width: 0; min-height: 0; flex-direction: column; overflow: hidden; border-right: 1px solid var(--app-border, #242424); background: var(--app-surface, #000); }
@@ -219,7 +218,7 @@ body .composer-options-menu .slash-option-active { border-left: 2px solid var(--
   .cwd-text { max-width: 90px; }
   .session-list-scroll { padding-inline: 8px; }
   .session-workspace { grid-template-columns: 220px minmax(0, 1fr); }
-  .session-workspace.session-workspace-sidebar-collapsed { grid-template-columns: 42px minmax(0, 1fr); }
+  .session-workspace.session-workspace-sidebar-collapsed { grid-template-columns: 0 minmax(0, 1fr); }
 }
 @container (max-width: 440px) {
   .pane-output { padding: 10px 9px; }

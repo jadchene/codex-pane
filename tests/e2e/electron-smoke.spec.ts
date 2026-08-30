@@ -82,6 +82,10 @@ test("switches sessions in the persistent session-sidebar mode", async () => {
     await settingsDialog.getByText("会话侧栏", { exact: true }).click();
     await settingsDialog.getByRole("button", { name: /关闭|close/i }).click();
     await expect(window.locator(".session-sidebar")).toBeVisible();
+    await window.getByRole("button", { name: "收起会话列表" }).click();
+    await expect(window.locator(".session-sidebar")).toBeHidden();
+    await window.getByRole("button", { name: "展开会话列表" }).click();
+    await expect(window.locator(".session-sidebar")).toBeVisible();
     await expect(window.locator(".pane")).toHaveCount(1);
     await expect.poll(() => window.locator("section.pane").evaluate((pane) => {
       const composer = pane.querySelector<HTMLElement>(".composer");
