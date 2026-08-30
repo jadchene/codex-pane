@@ -257,6 +257,16 @@ describe("PaneView compact workbench interactions", () => {
     expect(wrapper.emitted("send")).toBeUndefined();
   });
 
+  it("does not accidentally send an unknown slash command as a normal prompt", async () => {
+    const { value, wrapper } = mountPane(reactive(pane()));
+    value.draft = "/does-not-exist";
+    await nextTick();
+    await wrapper.get("textarea").trigger("keydown", { key: "Enter" });
+    expect(wrapper.emitted("send")).toBeUndefined();
+    expect(value.draft).toBe("/does-not-exist");
+    expect(wrapper.get(".composer-notice").text()).toContain("未识别这个斜杠命令");
+  });
+
   it("sorts slash commands alphabetically and shows used context", async () => {
     const { value, wrapper } = mountPane();
     value.contextRemainingPercent = 62;
@@ -293,7 +303,7 @@ describe("PaneView compact workbench interactions", () => {
     expect(wrapper.emitted("slashCommand")).toBeUndefined();
   });
 
-  it("scrolls slash, Skill, and file selections into view with arrow keys", async () => {
+  it("scrolls populated slash and Skill selections into view without searching an empty file query", async () => {
     vi.useFakeTimers();
     const originalScrollIntoView = Element.prototype.scrollIntoView;
     const scrollIntoView = vi.fn();
@@ -317,7 +327,9 @@ describe("PaneView compact workbench interactions", () => {
       await textarea.trigger("keydown", { key: "ArrowDown" });
       await nextTick();
 
-      expect(scrollIntoView).toHaveBeenCalledTimes(3);
+      expect(searchFiles).not.toHaveBeenCalled();
+      expect(wrapper.getComponent(NDropdown).props("options")?.[0]?.label).toBe("继续输入文件名以开始搜索");
+      expect(scrollIntoView).toHaveBeenCalledTimes(2);
       expect(scrollIntoView).toHaveBeenLastCalledWith({ block: "nearest", inline: "nearest" });
     } finally {
       if (originalScrollIntoView) Object.defineProperty(Element.prototype, "scrollIntoView", { configurable: true, value: originalScrollIntoView });
@@ -356,7 +368,7 @@ describe("PaneView compact workbench interactions", () => {
     }
   });
 
-  it("starts file suggestions at $ and sends unmatched references as plain text", async () => {
+  it("waits for a file query at $ and sends an unmatched reference as plain text", async () => {
     vi.useFakeTimers();
     try {
       const searchFiles = vi.fn().mockResolvedValue([]);
@@ -365,9 +377,9 @@ describe("PaneView compact workbench interactions", () => {
       await textarea.setValue("请检查$");
       await vi.advanceTimersByTimeAsync(120);
       await nextTick();
-      expect(searchFiles).toHaveBeenCalledWith("");
+      expect(searchFiles).not.toHaveBeenCalled();
       expect(wrapper.getComponent(NDropdown).props("show")).toBe(true);
-      expect(wrapper.getComponent(NDropdown).props("options")?.[0]?.label).toBe("没有匹配的文件");
+      expect(wrapper.getComponent(NDropdown).props("options")?.[0]?.label).toBe("继续输入文件名以开始搜索");
       await textarea.trigger("keydown", { key: "Enter" });
       expect(wrapper.emitted("send")).toHaveLength(1);
       expect(value.draft).toBe("请检查$");
@@ -453,6 +465,25 @@ describe("PaneView compact workbench interactions", () => {
     await wrapper.setProps({ models: [{ ...models[0]!, inputModalities: ["text"] }] });
     expect(wrapper.get(".composer-warning").text()).toContain("当前模型不支持图片");
     expect(wrapper.findAll("button").find((button) => button.text() === "发送")!.attributes("disabled")).toBeDefined();
+  });
+
+  it("blocks sends while disconnected and makes the attachment quota visible", async () => {
+    const value = reactive(pane());
+    value.draft = "稍后发送";
+    value.attachments = Array.from({ length: 20 }, (_, index) => ({
+      id: `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
+      name: `image-${index}.png`,
+      url: `codex-media://media/${index}`,
+      size: 2048,
+      kind: "local" as const
+    }));
+    const { wrapper } = mountPane(value);
+    await wrapper.setProps({ connectionReady: false });
+    expect(wrapper.get(".composer-notice").text()).toContain("Codex 尚未连接");
+    expect(wrapper.get(".attachment-summary").text()).toContain("20 / 20");
+    expect(wrapper.get('button[aria-label="添加附件"]').attributes("disabled")).toBeDefined();
+    await wrapper.get("textarea").trigger("keydown", { key: "Enter" });
+    expect(wrapper.emitted("send")).toBeUndefined();
   });
 
   it("leaves pasted text in the composer and routes pasted files through attachments", async () => {

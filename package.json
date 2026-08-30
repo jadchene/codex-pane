@@ -18,7 +18,10 @@
     "verify:desktop": "npm run verify && npm run test:e2e",
     "verify:release": "npm run verify:desktop && npm run probe:app-server && npm run package:win && npm run test:packaged",
     "probe:app-server": "node scripts/probe-app-server.mjs",
-    "package:win": "npm run build && electron-builder --win dir",
+    "package:win": "npm run build && electron-builder --win nsis portable dir",
+    "package:win:installer": "npm run build && electron-builder --win nsis",
+    "package:win:portable": "npm run build && electron-builder --win portable",
+    "package:win:unpacked": "npm run build && electron-builder --win dir",
     "test:packaged": "node scripts/run-packaged-smoke.mjs",
     "test:packaged:live": "node scripts/run-packaged-live.mjs",
     "test:approval:live": "node scripts/run-live-approval.mjs",
@@ -78,8 +81,20 @@
     "win": {
       "icon": "assets/icon.png",
       "target": [
+        "nsis",
+        "portable",
         "dir"
       ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": "always",
+      "createStartMenuShortcut": true,
+      "deleteAppDataOnUninstall": false
+    },
+    "portable": {
+      "requestExecutionLevel": "user"
     }
   },
   "allowScripts": {

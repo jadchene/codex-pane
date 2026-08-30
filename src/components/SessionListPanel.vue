@@ -41,6 +41,8 @@ let timer: ReturnType<typeof setTimeout> | null = null;
 const emptyDescription = computed(() => search.value.trim()
   ? `没有找到与“${search.value.trim()}”匹配的会话`
   : props.showAll ? "还没有历史会话" : "当前工作目录还没有会话");
+const unreadThreadSet = computed(() => new Set(props.unreadThreadIds));
+const workingThreadSet = computed(() => new Set(props.workingThreadIds));
 
 const focusSearch = async (): Promise<void> => {
   await nextTick();
@@ -104,13 +106,14 @@ defineExpose({ focusSearch });
             >
               <div class="session-item-body">
               <div class="session-title-row">
-                <NIcon v-if="workingThreadIds.includes(thread.id)" :component="SyncOutline" class="session-working-icon" aria-label="正在工作" />
+                <NIcon v-if="workingThreadSet.has(thread.id)" :component="SyncOutline" class="session-working-icon" aria-label="正在工作" />
                 <span
-                  v-if="!workingThreadIds.includes(thread.id) && unreadThreadIds.includes(thread.id) && thread.id !== activeThreadId"
+                  v-if="!workingThreadSet.has(thread.id) && unreadThreadSet.has(thread.id) && thread.id !== activeThreadId"
                   class="session-unread-dot"
                   aria-label="有未读内容"
                 />
                 <strong class="session-title">{{ thread.name || thread.preview.slice(0, 80) || "未命名会话" }}</strong>
+                <NTag v-if="workingThreadSet.has(thread.id)" size="small" type="warning">运行中</NTag>
                 <NTag v-if="thread.id === activeThreadId" size="small" type="success">当前</NTag>
               </div>
               <div class="session-meta">
@@ -125,6 +128,7 @@ defineExpose({ focusSearch });
             <template v-if="showResumeButton" #suffix><NButton size="small" secondary class="session-resume-button" @click.stop="emit('resume', thread.id)">恢复</NButton></template>
           </NListItem>
         </NList>
+        <NText v-if="threads.length >= 100" depth="3" class="session-result-limit">当前显示最近 100 个结果，可缩小搜索范围继续查找。</NText>
       </div>
     </NSpin>
   </div>

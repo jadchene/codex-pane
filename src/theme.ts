@@ -6,8 +6,10 @@ const darkPalette = { background: "#0c0d0f", surface: "#111316", raised: "#191c2
 const lightPalette = { background: "#f3f5f7", surface: "#ffffff", raised: "#f7f8fa", border: "#d9dee5", controlBorder: "#a9b1bb", text: "#171a1f", muted: "#626b76", diffAdd: "#dafbe1", diffDelete: "#ffebe9", diffAddGutter: "#aceebb", diffDeleteGutter: "#ffcecb", diffGutterText: "#1f2328", diffAddText: "#116329", diffDeleteText: "#82071e" };
 const defaultFontFamily = '"Segoe UI", "Microsoft YaHei UI", sans-serif';
 
-export const appearanceCssVars = (appearance: AppearanceSettings): CSSProperties => {
-  const palette = appearance.theme === "dark" ? darkPalette : lightPalette;
+export const resolvedTheme = (appearance: AppearanceSettings, systemPrefersDark = true): "dark" | "light" => appearance.theme === "system" ? systemPrefersDark ? "dark" : "light" : appearance.theme;
+
+export const appearanceCssVars = (appearance: AppearanceSettings, systemPrefersDark = true): CSSProperties => {
+  const palette = resolvedTheme(appearance, systemPrefersDark) === "dark" ? darkPalette : lightPalette;
   const fontFamily = appearance.fontFamily.trim() || defaultFontFamily;
   return {
     "--app-bg": palette.background,
@@ -30,8 +32,8 @@ export const appearanceCssVars = (appearance: AppearanceSettings): CSSProperties
   } as CSSProperties;
 };
 
-export const appearanceThemeOverrides = (appearance: AppearanceSettings): GlobalThemeOverrides => {
-  const palette = appearance.theme === "dark" ? darkPalette : lightPalette;
+export const appearanceThemeOverrides = (appearance: AppearanceSettings, systemPrefersDark = true): GlobalThemeOverrides => {
+  const palette = resolvedTheme(appearance, systemPrefersDark) === "dark" ? darkPalette : lightPalette;
   const fontFamily = appearance.fontFamily.trim() || defaultFontFamily;
   return {
     common: {

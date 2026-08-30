@@ -2,7 +2,7 @@ import type { ConnectionState, FileReference, MediaAttachment } from "../electro
 
 export type LayoutKind = "single" | "vertical" | "horizontal" | "quad" | "fourColumns" | "fourRows" | "six";
 export type WorkspaceMode = "panes" | "sessionSidebar";
-export type ThemeMode = "dark" | "light";
+export type ThemeMode = "system" | "dark" | "light";
 
 export type AppearanceSettings = {
   theme: ThemeMode;
@@ -146,6 +146,7 @@ export type ThreadSummary = {
 };
 
 export type AppState = {
+  appVersion: string;
   connection: ConnectionState;
   workspaceMode: WorkspaceMode;
   layout: LayoutKind;

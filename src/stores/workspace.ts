@@ -11,8 +11,8 @@ const DEFAULT_CONNECTION: ConnectionState = {
   message: "正在启动…"
 };
 
-const DEFAULT_APPEARANCE: AppearanceSettings = {
-  theme: "dark",
+export const DEFAULT_APPEARANCE: AppearanceSettings = {
+  theme: "system",
   fontFamily: '"Segoe UI", "Microsoft YaHei UI", sans-serif',
   fontSize: 14,
   accentColor: "#10a37f",
@@ -73,6 +73,7 @@ const formatAuthMode = (mode: string | null): string | null => {
 
 export const useWorkspaceStore = defineStore("workspace", () => {
   const state = ref<AppState>({
+    appVersion: "—",
     connection: DEFAULT_CONNECTION,
     workspaceMode: "panes",
     layout: "single",
@@ -183,6 +184,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
       removeProtocolListener();
     }, { once: true });
     const bootstrap = await window.codexPane.bootstrap();
+    state.value.appVersion = bootstrap.appVersion;
     state.value.connection = bufferedConnection ?? bootstrap.connection;
     if (bootstrap.workspace) {
       state.value.workspaceMode = bootstrap.workspace.workspaceMode;
@@ -340,6 +342,21 @@ export const useWorkspaceStore = defineStore("workspace", () => {
         : paths.length ? `检测到所有用户均可写的路径：${paths.slice(0, 3).join("、")}${extra}` : "检测到存在所有用户均可写的路径，请检查工作区权限。");
       return;
     }
+    if (method === "windowsSandbox/setupCompleted") {
+      addNotice(params.success === true
+        ? `Windows 沙箱已完成配置（${getString(params.mode) ?? "默认模式"}）。`
+        : `Windows 沙箱配置失败：${getString(params.error) ?? "请检查系统要求后重试"}`);
+      return;
+    }
+    if (method === "skills/changed") {
+      addNotice("Skill 配置已变化，正在刷新各工作目录的可用 Skill。" );
+      void refreshAllSkills();
+      return;
+    }
+    if (method === "guardianWarning" && !getString(params.threadId)) {
+      addNotice(`安全警告：${getString(params.message) ?? "Guardian 返回了一条警告"}`);
+      return;
+    }
     if (method === "account/login/completed" && params.success === false) {
       addNotice(`登录未完成：${getString(params.error) ?? "请重试"}`);
     }
@@ -376,6 +393,60 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     };
     if (method === "warning" || method === "configWarning") {
       appendProtocolNotice(method === "configWarning" ? "配置警告" : "Codex 警告", getString(params.message) ?? getString(params.summary) ?? "Codex 返回了一条警告", "warning", getString(params.details) ?? params.path);
+      return;
+    }
+    if (method === "guardianWarning") {
+      appendProtocolNotice("安全警告", getString(params.message) ?? "Guardian 返回了一条警告", "warning");
+      return;
+    }
+    if (method === "thread/compacted") {
+      pane.tokenUsage = null;
+      pane.contextRemainingPercent = null;
+      appendProtocolNotice("上下文已压缩", "较早内容已由 Codex 汇总，后续任务将使用压缩后的上下文。", "info");
+      return;
+    }
+    if (method === "thread/closed") {
+      pane.activeTurnId = null;
+      pane.status = "idle";
+      appendProtocolNotice("会话已关闭", "Codex 已关闭此会话；需要时可从历史记录重新恢复。", "info");
+      return;
+    }
+    if (method === "thread/archived") {
+      appendProtocolNotice("会话已归档", "此会话已从普通历史列表归档。", "info");
+      return;
+    }
+    if (method === "thread/unarchived") {
+      appendProtocolNotice("会话已取消归档", "此会话已重新回到历史列表。", "info");
+      return;
+    }
+    if (method === "thread/deleted") {
+      const deletedTitle = pane.title;
+      resetPane(pane);
+      pane.error = `会话“${deletedTitle}”已被删除；此窗格已切换为新会话。`;
+      scheduleSave();
+      return;
+    }
+    if (method === "turn/plan/updated") {
+      const turnId = getString(params.turnId) ?? pane.activeTurnId ?? "local";
+      const steps = Array.isArray(params.plan) ? params.plan.map(getRecord) : [];
+      const statusLabels: Record<string, string> = { pending: "待处理", inProgress: "进行中", completed: "已完成" };
+      const text = [getString(params.explanation), ...steps.map((step) => `- [${getString(step.status) === "completed" ? "x" : " "}] ${getString(step.step) ?? "未命名步骤"}（${statusLabels[getString(step.status) ?? ""] ?? getString(step.status) ?? "未知状态"}）`)].filter(Boolean).join("\n\n");
+      const itemId = `turn-plan:${turnId}`;
+      const existing = findPaneItem(pane, itemId, turnId);
+      if (existing) {
+        existing.data = markRaw({ text, plan: steps });
+        existing.status = steps.length > 0 && steps.every((step) => getString(step.status) === "completed") ? "completed" : "running";
+      } else {
+        appendPaneItem(pane, { id: itemId, turnId, type: "plan", data: { text, plan: steps }, streamText: "", status: steps.length > 0 && steps.every((step) => getString(step.status) === "completed") ? "completed" : "running" });
+      }
+      return;
+    }
+    if (method === "hook/completed") {
+      const run = getRecord(params.run);
+      const status = getString(run.status);
+      if (status && !["completed", "succeeded", "success"].includes(status)) {
+        appendProtocolNotice("Hook 执行异常", getString(run.statusMessage) ?? `Hook ${getString(run.eventName) ?? ""} 未成功完成`, "warning", run.entries);
+      }
       return;
     }
     if (method === "model/rerouted") {
@@ -1049,6 +1120,10 @@ export const useWorkspaceStore = defineStore("workspace", () => {
 
   const dismissNotice = (): void => {
     state.value.notices.pop();
+  };
+
+  const dismissAllNotices = (): void => {
+    state.value.notices = [];
   };
 
   const resumeBoundThreads = async (): Promise<void> => {
@@ -1771,6 +1846,10 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   };
 
   const chooseDirectory = async (pane: PaneState): Promise<void> => {
+    if (isPaneWorking(pane)) {
+      pane.error = "当前任务或确认请求尚未完成，请完成后再切换工作目录。";
+      return;
+    }
     const cwd = await window.codexPane.chooseDirectory();
     if (cwd) {
       if (pane.threadId) {
@@ -1783,6 +1862,12 @@ export const useWorkspaceStore = defineStore("workspace", () => {
 
   const updateAppearance = (appearance: Partial<AppearanceSettings>): void => {
     state.value.appearance = { ...state.value.appearance, ...appearance };
+    scheduleSave();
+  };
+
+  const resetAppearance = (): void => {
+    state.value.appearance = { ...DEFAULT_APPEARANCE };
+    addNotice("外观和命令显示设置已恢复默认值。" );
     scheduleSave();
   };
 
@@ -1869,6 +1954,23 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     } catch (error) {
       pane.error = `无法读取 Skills：${error instanceof Error ? error.message : String(error)}`;
     }
+  };
+
+  const refreshAllSkills = async (): Promise<void> => {
+    const groups = new Map<string, PaneState[]>();
+    for (const pane of state.value.panes) {
+      const cwd = pane.cwd || state.value.defaultCwd;
+      groups.set(cwd, [...(groups.get(cwd) ?? []), pane]);
+    }
+    await Promise.all([...groups].map(async ([cwd, panes]) => {
+      try {
+        const result = getRecord(await window.codexPane.request({ method: "skills/list", params: { cwds: cwd ? [cwd] : [], forceReload: false } }));
+        for (const pane of panes) updatePaneSkills(pane, result);
+      } catch (error) {
+        const message = `无法刷新 Skills：${error instanceof Error ? error.message : String(error)}`;
+        for (const pane of panes) pane.error ??= message;
+      }
+    }));
   };
 
   const searchWorkspaceFiles = async (pane: PaneState, query: string): Promise<Array<{ name: string; path: string; relativePath: string }>> => {
@@ -2013,6 +2115,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     toggleFocus,
     setSplitSizes,
     updateAppearance,
+    resetAppearance,
     chooseDirectory,
     chooseDefaultDirectory,
     clearDefaultDirectory,
@@ -2031,6 +2134,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     resolveRequest,
     reconnect,
     dismissNotice,
+    dismissAllNotices,
     refreshMcpServers,
     loginMcpServer,
     refreshBackgroundTerminals,

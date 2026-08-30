@@ -2,7 +2,8 @@ import { basename, dirname, extname, join, resolve } from "node:path";
 import { existsSync, mkdirSync, readFileSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { app, BrowserWindow, clipboard, dialog, ipcMain, protocol, safeStorage, screen, shell } from "electron";
+import { stat as statFile } from "node:fs/promises";
+import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeTheme, protocol, safeStorage, screen, shell } from "electron";
 import { AppServerSupervisor } from "./app-server-supervisor.js";
 import { FileStore } from "./file-store.js";
 import { MediaStore } from "./media-store.js";
@@ -100,8 +101,23 @@ let stateStore: StateStore;
 let diagnosticLog: DiagnosticLog;
 let forceClosing = false;
 let shutdownInProgress = false;
+let closeRequestInFlight = false;
+let workspaceSaveConfirmed = false;
+let closeRequestTimer: NodeJS.Timeout | null = null;
 let windowSaveTimer: NodeJS.Timeout | null = null;
 const execFileAsync = promisify(execFile);
+const isExistingDirectory = async (path: string): Promise<boolean> => {
+  if (!path) return false;
+  let timer: NodeJS.Timeout | null = null;
+  try {
+    return await Promise.race([
+      statFile(path).then((metadata) => metadata.isDirectory()).catch(() => false),
+      new Promise<boolean>((resolvePromise) => { timer = setTimeout(() => resolvePromise(false), 2_000); })
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+};
 
 const listWindowsFonts = async (): Promise<string[]> => {
   if (process.platform !== "win32") return [];
@@ -139,6 +155,28 @@ const shutdownApplication = async (): Promise<void> => {
       message: `无法安全退出 Codex：${error instanceof Error ? error.message : String(error)}`
     });
   }
+};
+
+const continueCloseAfterSave = (): void => {
+  workspaceSaveConfirmed = false;
+  if (!supervisor.hasActiveWork) {
+    void shutdownApplication();
+    return;
+  }
+  void dialog.showMessageBox(mainWindow!, {
+    type: "warning",
+    title: "Codex 仍在运行",
+    message: "仍有任务或确认请求未完成。要先中断它们再退出吗？",
+    detail: "工作台草稿已经保存。退出不会让 Codex 在后台继续运行，也不会自动重发未完成的操作。",
+    buttons: ["返回", "中断并退出"],
+    defaultId: 0,
+    cancelId: 0,
+    noLink: true
+  }).then(async ({ response }) => {
+    if (response !== 1) return;
+    await supervisor.interruptActiveWork();
+    await shutdownApplication();
+  });
 };
 
 const scheduleWindowStateSave = (): void => {
@@ -287,7 +325,7 @@ const createWindow = async (): Promise<void> => {
     minHeight: 680,
     show: false,
     frame: false,
-    backgroundColor: workspace?.appearance?.theme === "light" ? "#ffffff" : "#000000",
+    backgroundColor: workspace?.appearance?.theme === "light" || workspace?.appearance?.theme === "system" && !nativeTheme.shouldUseDarkColors ? "#ffffff" : "#000000",
     autoHideMenuBar: true,
     webPreferences: {
       preload: join(app.getAppPath(), "dist-electron/preload.cjs"),
@@ -331,24 +369,19 @@ const createWindow = async (): Promise<void> => {
   mainWindow.on("close", (event) => {
     if (forceClosing) return;
     event.preventDefault();
-    if (!supervisor.hasActiveWork) {
-      void shutdownApplication();
+    if (workspaceSaveConfirmed) {
+      continueCloseAfterSave();
       return;
     }
-    void dialog.showMessageBox(mainWindow!, {
-      type: "warning",
-      title: "Codex 仍在运行",
-      message: "仍有任务或确认请求未完成。要先中断它们再退出吗？",
-      detail: "直接退出不会让 Codex 在后台继续运行，也不会自动重发未完成的操作。",
-      buttons: ["返回", "中断并退出"],
-      defaultId: 0,
-      cancelId: 0,
-      noLink: true
-    }).then(async ({ response }) => {
-      if (response !== 1) return;
-      await supervisor.interruptActiveWork();
-      await shutdownApplication();
-    });
+    if (closeRequestInFlight) return;
+    closeRequestInFlight = true;
+    mainWindow?.webContents.send("window:close-requested");
+    if (closeRequestTimer) clearTimeout(closeRequestTimer);
+    closeRequestTimer = setTimeout(() => {
+      closeRequestTimer = null;
+      closeRequestInFlight = false;
+      mainWindow?.webContents.send("codex:state", { ...supervisor.state, phase: "error", message: "退出前保存工作台超时；窗口已保持打开，请重试。" });
+    }, 10_000);
   });
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     return { action: "deny" };
@@ -377,11 +410,22 @@ const registerIpc = (): void => {
   };
   ipcMain.handle("app:bootstrap", async (event) => {
     assertTrustedSender(event);
-    const workspace = unprotectRemoteUrls(await stateStore.load());
+    const loadedWorkspace = unprotectRemoteUrls(await stateStore.load());
+    const savedDirectories = loadedWorkspace ? [loadedWorkspace.defaultCwd, ...loadedWorkspace.panes.map((pane) => pane.cwd)] : [];
+    const uniqueDirectories = [...new Set(savedDirectories.filter(Boolean))];
+    const directoryChecks = await Promise.all(uniqueDirectories.map(async (path) => [path, await isExistingDirectory(path)] as const));
+    const validDirectories = new Set(directoryChecks.filter(([, valid]) => valid).map(([path]) => path));
+    const invalidDirectoryCount = savedDirectories.filter((path) => path && !validDirectories.has(path)).length;
+    const workspace = loadedWorkspace ? {
+      ...loadedWorkspace,
+      defaultCwd: validDirectories.has(loadedWorkspace.defaultCwd) ? loadedWorkspace.defaultCwd : "",
+      panes: loadedWorkspace.panes.map((pane) => ({ ...pane, cwd: validDirectories.has(pane.cwd) ? pane.cwd : "" }))
+    } : null;
     return {
+      appVersion: app.getVersion(),
       connection: supervisor.state,
       workspace,
-      workspaceWarning: [userDataLocation.warning, stateStore.loadWarning].filter(Boolean).join(" ") || null
+      workspaceWarning: [userDataLocation.warning, stateStore.loadWarning, invalidDirectoryCount ? `上次保存的 ${invalidDirectoryCount} 个工作目录已不存在，已改用安全默认目录。` : null].filter(Boolean).join(" ") || null
     };
   });
   ipcMain.handle("system:fonts", async (event) => {
@@ -407,7 +451,7 @@ const registerIpc = (): void => {
     assertTrustedSender(event);
     if (rawPath !== null && (typeof rawPath !== "string" || rawPath.length > 32_768)) throw new Error("全局默认工作目录无效。");
     const workingDirectory = rawPath ? resolve(rawPath) : fallbackAppServerWorkingDirectory;
-    if (!existsSync(workingDirectory) || !statSync(workingDirectory).isDirectory()) throw new Error("全局默认工作目录不存在或不是目录。");
+    if (!await isExistingDirectory(workingDirectory)) throw new Error("全局默认工作目录不存在、不是目录或检查超时。");
     supervisor.setWorkingDirectory(workingDirectory);
   });
   ipcMain.handle("dialog:directory", async (event) => {
@@ -494,6 +538,16 @@ const registerIpc = (): void => {
   ipcMain.handle("window:is-maximized", (event) => {
     assertTrustedSender(event);
     return mainWindow?.isMaximized() ?? false;
+  });
+  ipcMain.handle("window:close-response", (event, allow: unknown) => {
+    assertTrustedSender(event);
+    if (typeof allow !== "boolean") throw new Error("退出确认参数无效。");
+    if (closeRequestTimer) clearTimeout(closeRequestTimer);
+    closeRequestTimer = null;
+    closeRequestInFlight = false;
+    if (!allow) return;
+    workspaceSaveConfirmed = true;
+    mainWindow?.close();
   });
   ipcMain.handle("clipboard:write-text", async (event, rawValue: unknown) => {
     assertTrustedSender(event);
@@ -585,7 +639,7 @@ app.whenReady().then(async () => {
   stateStore = new StateStore(join(dataDirectory, "workspaces", "default.json"));
   const persistedWorkspace = await stateStore.load();
   const initialWorkingDirectory = persistedWorkspace?.defaultCwd || fallbackAppServerWorkingDirectory;
-  if (existsSync(initialWorkingDirectory) && statSync(initialWorkingDirectory).isDirectory()) {
+  if (await isExistingDirectory(initialWorkingDirectory)) {
     supervisor.setWorkingDirectory(initialWorkingDirectory);
   }
   diagnosticLog = new DiagnosticLog(join(dataDirectory, "logs"));

@@ -23,7 +23,7 @@ Switch modes at any time in Settings.
 ## Quick Start
 
 1. Make sure `codex` works in PowerShell 7.
-2. Open the `win-unpacked` directory.
+2. For normal use, run `Codex Pane Setup *.exe`; use the portable `Codex Pane *.exe` when installation is not desired, or open `win-unpacked` for development diagnostics.
 3. Run `Codex Pane.exe` and choose a default working directory.
 
 ## Features
@@ -53,6 +53,8 @@ npm run dev
 npm run verify
 npm run package:win
 ```
+
+`package:win` produces an assisted NSIS installer, a portable executable, and `win-unpacked`. Run `package:win:installer`, `package:win:portable`, or `package:win:unpacked` to build only one form.
 
 ## License
 

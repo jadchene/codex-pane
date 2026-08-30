@@ -12,8 +12,30 @@ const child = spawn(process.platform === "win32" ? process.env.ComSpec ?? "C:\\W
 const lines = createInterface({ input: child.stdout });
 const pending = new Map();
 let nextId = 1;
+let childFailure = null;
 
-const write = (message) => child.stdin.write(`${JSON.stringify(message)}\n`);
+const rejectPending = (error) => {
+  for (const request of pending.values()) {
+    clearTimeout(request.timer);
+    request.reject(error);
+  }
+  pending.clear();
+};
+child.on("error", (error) => {
+  childFailure = error.code === "ENOENT"
+    ? new Error("Codex CLI was not found. Install Codex and make sure `codex` is available on PATH.")
+    : new Error(`Codex app-server failed to start: ${error.message}`);
+  rejectPending(childFailure);
+});
+child.on("exit", (code, signal) => {
+  if (!pending.size || childFailure) return;
+  rejectPending(new Error(`Codex app-server exited before the probe completed (${signal ?? `code ${code ?? "unknown"}`}).`));
+});
+
+const write = (message) => {
+  if (childFailure) throw childFailure;
+  child.stdin.write(`${JSON.stringify(message)}\n`);
+};
 const call = (method, params) => new Promise((resolve, reject) => {
   const id = nextId++;
   const timer = setTimeout(() => {

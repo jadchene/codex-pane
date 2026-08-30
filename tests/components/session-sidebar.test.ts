@@ -109,4 +109,20 @@ describe("SessionSidebar", () => {
     expect(wrapper.getComponent(NModal).props()).toMatchObject({ title: "无法切换会话", content: "无法恢复会话：会话已在其他客户端中打开" });
     expect(store.state.panes[0]!.error).toBeNull();
   });
+
+  it("keeps history loading failures in the sidebar and offers an in-place retry", async () => {
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    const store = useWorkspaceStore();
+    store.state.connection.phase = "ready";
+    store.state.workspaceMode = "sessionSidebar";
+    const loadThreads = vi.spyOn(store, "loadThreads").mockRejectedValueOnce(new Error("app-server 暂时不可用")).mockResolvedValue(undefined);
+    const wrapper = mount(SessionSidebar, { props: { pane: store.state.panes[0]! }, global: { plugins: [pinia] } });
+    await vi.waitFor(() => expect(wrapper.find(".session-sidebar-error").exists()).toBe(true));
+    expect(wrapper.text()).toContain("app-server 暂时不可用");
+    expect(store.state.panes[0]!.error).toBeNull();
+    await wrapper.findAll("button").find((button) => button.text() === "重试")!.trigger("click");
+    await vi.waitFor(() => expect(loadThreads).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(wrapper.find(".session-sidebar-error").exists()).toBe(false));
+  });
 });

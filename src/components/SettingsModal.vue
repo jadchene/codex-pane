@@ -27,6 +27,8 @@ const systemFonts = ref<string[]>([]);
 const fontListState = ref<"idle" | "loading" | "ready" | "unavailable" | "denied">("idle");
 const diagnosticsState = ref<"idle" | "copying" | "copied" | "empty" | "error">("idle");
 const diagnosticsError = ref("");
+const runtimeAction = ref<"idle" | "choosing" | "clearing">("idle");
+const runtimeError = ref("");
 const fontOptions = computed(() => systemFonts.value.map((family) => ({ label: family, value: family })));
 const display = (value: string | null | undefined): string => value || "—";
 const noSpellcheckInputProps = { spellcheck: false, autocorrect: "off", autocapitalize: "off" } as const;
@@ -66,6 +68,19 @@ const copyDiagnostics = async (): Promise<void> => {
     diagnosticsError.value = error instanceof Error ? error.message : String(error);
   }
 };
+const runRuntimeAction = async (action: "choosing" | "clearing"): Promise<void> => {
+  if (runtimeAction.value !== "idle") return;
+  runtimeAction.value = action;
+  runtimeError.value = "";
+  try {
+    if (action === "choosing") await store.chooseDefaultDirectory();
+    else await store.clearDefaultDirectory();
+  } catch (error) {
+    runtimeError.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    runtimeAction.value = "idle";
+  }
+};
 watch(() => props.show, (show) => { if (show) void loadSystemFonts(); }, { immediate: true });
 </script>
 
@@ -95,10 +110,10 @@ watch(() => props.show, (show) => { if (show) void loadSystemFonts(); }, { immed
       </section>
       <NDivider />
       <section class="settings-section">
-        <div class="settings-section-heading"><NText strong>外观</NText><NText depth="3">更改会立即应用到整个窗口。</NText></div>
+        <div class="settings-section-heading"><NText strong>外观</NText><NSpace align="center"><NText depth="3">更改会立即应用。</NText><NButton size="tiny" secondary @click="store.resetAppearance">恢复默认</NButton></NSpace></div>
         <NForm label-placement="left" label-width="148" class="settings-form">
           <NFormItem label="主题">
-            <NRadioGroup v-model:value="theme" name="appearance-theme"><NRadioButton value="dark">深色</NRadioButton><NRadioButton value="light">浅色</NRadioButton></NRadioGroup>
+            <NRadioGroup v-model:value="theme" name="appearance-theme"><NRadioButton value="system">跟随系统</NRadioButton><NRadioButton value="dark">深色</NRadioButton><NRadioButton value="light">浅色</NRadioButton></NRadioGroup>
           </NFormItem>
           <NFormItem label="界面字体">
             <div class="font-field">
@@ -122,12 +137,13 @@ watch(() => props.show, (show) => { if (show) void loadSystemFonts(); }, { immed
               <NSpace align="center" justify="space-between">
                 <NText class="directory-value">{{ store.state.defaultCwd || "未设置，将使用应用目录" }}</NText>
                 <NSpace :wrap="false">
-                  <NButton type="primary" secondary @click="store.chooseDefaultDirectory">选择目录</NButton>
-                  <NButton v-if="store.state.defaultCwd" secondary @click="store.clearDefaultDirectory">清空</NButton>
+                  <NButton type="primary" secondary :loading="runtimeAction === 'choosing'" :disabled="runtimeAction !== 'idle'" @click="runRuntimeAction('choosing')">选择目录</NButton>
+                  <NButton v-if="store.state.defaultCwd" secondary :loading="runtimeAction === 'clearing'" :disabled="runtimeAction !== 'idle'" @click="runRuntimeAction('clearing')">清空</NButton>
                 </NSpace>
               </NSpace>
             </NCard>
           </NFormItem>
+          <NAlert v-if="runtimeError" type="error" closable @close="runtimeError = ''">无法更新运行目录：{{ runtimeError }}</NAlert>
           <NFormItem label="pwsh 路径">
             <NInput v-model:value="commandShellPath" :input-props="noSpellcheckInputProps" clearable placeholder="C:\Program Files\PowerShell\7\pwsh.exe" />
           </NFormItem>
@@ -162,6 +178,7 @@ watch(() => props.show, (show) => { if (show) void loadSystemFonts(); }, { immed
       <section class="settings-section">
         <div class="settings-section-heading"><NText strong>诊断与兼容性</NText><NText depth="3">最近 200 条</NText></div>
         <NDescriptions label-placement="left" bordered :column="2" class="diagnostics-summary">
+          <NDescriptionsItem label="Codex Pane">{{ store.state.appVersion }}</NDescriptionsItem>
           <NDescriptionsItem label="连接状态">{{ store.state.connection.message }}</NDescriptionsItem>
           <NDescriptionsItem label="Codex 版本">{{ display(store.state.connection.codexVersion) }}</NDescriptionsItem>
         </NDescriptions>

@@ -6,7 +6,7 @@ import hljs from "highlight.js/lib/core";
 import powershell from "highlight.js/lib/languages/powershell";
 import { useWorkspaceStore } from "./stores/workspace";
 import type { LayoutKind, PaneState, WorkspaceMode } from "./types";
-import { appearanceCssVars, appearanceThemeOverrides } from "./theme";
+import { appearanceCssVars, appearanceThemeOverrides, resolvedTheme } from "./theme";
 import WorkspaceView from "./components/WorkspaceView.vue";
 import SessionDrawer from "./components/SessionDrawer.vue";
 import SettingsModal from "./components/SettingsModal.vue";
@@ -26,6 +26,8 @@ const sessionPaneId = ref<string | null>(null);
 const sessionPane = computed(() => store.state.panes.find((pane) => pane.id === sessionPaneId.value) ?? null);
 const sessionFilterCwd = computed(() => sessionPane.value?.cwd || store.state.defaultCwd || "");
 const workspaceView = ref<InstanceType<typeof WorkspaceView> | null>(null);
+const systemPrefersDark = ref(window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? true);
+const resolvedAppearanceTheme = computed(() => resolvedTheme(store.state.appearance, systemPrefersDark.value));
 
 const layoutLabels: Record<LayoutKind, string> = {
   single: "单窗格",
@@ -37,9 +39,9 @@ const layoutLabels: Record<LayoutKind, string> = {
   six: "六宫格"
 };
 const layoutOptions = Object.entries(layoutLabels).map(([key, label]) => ({ key, label }));
-const activeTheme = computed(() => store.state.appearance.theme === "dark" ? darkTheme : null);
-const themeOverrides = computed(() => appearanceThemeOverrides(store.state.appearance));
-const appearanceStyle = computed(() => appearanceCssVars(store.state.appearance));
+const activeTheme = computed(() => resolvedAppearanceTheme.value === "dark" ? darkTheme : null);
+const themeOverrides = computed(() => appearanceThemeOverrides(store.state.appearance, systemPrefersDark.value));
+const appearanceStyle = computed(() => appearanceCssVars(store.state.appearance, systemPrefersDark.value));
 const connectionStatus = computed(() => {
   const phase = store.state.connection.phase;
   if (phase === "ready" && store.state.connection.compatible === false) return { label: "版本未验证", tone: "working" };
@@ -133,14 +135,6 @@ const toggleFullScreen = async (): Promise<void> => {
 const exitFullScreen = async (): Promise<void> => window.codexPane.setFullScreen(false);
 
 const controlWindow = async (action: "minimize" | "maximize" | "close"): Promise<void> => {
-  if (action === "close") {
-    try {
-      await store.flushSave();
-    } catch {
-      // Keep the window open so the pane can show the save failure and the user can retry or copy the draft.
-      return;
-    }
-  }
   await window.codexPane.windowControl(action);
 };
 
@@ -205,6 +199,9 @@ const closeSessions = async (): Promise<void> => {
 
 let removeFullscreenListener: (() => void) | null = null;
 let removeMaximizedListener: (() => void) | null = null;
+let removeCloseRequestedListener: (() => void) | null = null;
+let colorSchemeQuery: MediaQueryList | null = null;
+const handleColorSchemeChange = (event: MediaQueryListEvent): void => { systemPrefersDark.value = event.matches; };
 const handleGlobalKeydown = (event: KeyboardEvent): void => {
   if (event.key === "F11" && !event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey) {
     event.preventDefault();
@@ -221,8 +218,17 @@ const handleGlobalKeydown = (event: KeyboardEvent): void => {
   selectWorkspaceMode(store.state.workspaceMode === "panes" ? "sessionSidebar" : "panes");
 };
 onMounted(() => {
+  colorSchemeQuery = window.matchMedia?.("(prefers-color-scheme: dark)") ?? null;
+  systemPrefersDark.value = colorSchemeQuery?.matches ?? true;
+  colorSchemeQuery?.addEventListener?.("change", handleColorSchemeChange);
   removeFullscreenListener = window.codexPane.onFullScreenChange((value) => { fullScreen.value = value; });
   removeMaximizedListener = window.codexPane.onMaximizedChange((value) => { maximized.value = value; });
+  removeCloseRequestedListener = window.codexPane.onCloseRequested?.(() => {
+    void store.flushSave().then(
+      () => window.codexPane.respondToCloseRequest(true),
+      () => window.codexPane.respondToCloseRequest(false)
+    );
+  }) ?? null;
   void window.codexPane.isMaximized().then((value) => { maximized.value = value; });
   window.addEventListener("keydown", handleGlobalKeydown);
   void store.initialize().catch((error) => {
@@ -239,12 +245,14 @@ onMounted(() => {
 watchEffect(() => {
   const variables = appearanceStyle.value as Record<string, string | number>;
   for (const [name, value] of Object.entries(variables)) document.documentElement.style.setProperty(name, String(value));
-  document.documentElement.style.colorScheme = store.state.appearance.theme === "dark" ? "dark" : "light";
+  document.documentElement.style.colorScheme = resolvedAppearanceTheme.value;
   document.body.style.backgroundColor = String(variables["--app-bg"]);
 });
 onUnmounted(() => {
   removeFullscreenListener?.();
   removeMaximizedListener?.();
+  removeCloseRequestedListener?.();
+  colorSchemeQuery?.removeEventListener?.("change", handleColorSchemeChange);
   window.removeEventListener("keydown", handleGlobalKeydown);
 });
 </script>
@@ -278,9 +286,9 @@ onUnmounted(() => {
             </NLayoutHeader>
 
             <NAlert v-if="store.state.connection.phase === 'error'" type="error" class="connection-alert" :title="store.state.connection.message">
-              <div class="connection-alert-content"><span>请确认终端中可以运行 codex --version。</span><NButton size="small" type="error" secondary @click="requestReconnect">重新连接</NButton></div>
+              <div class="connection-alert-content"><span>确认已安装 Codex CLI，并在 PowerShell 中运行 <code>codex --version</code>；仍失败时可复制脱敏诊断。</span><NSpace :wrap="false"><NButton size="small" secondary @click="settingsOpen = true">打开诊断</NButton><NButton size="small" type="error" secondary @click="requestReconnect">重新连接</NButton></NSpace></div>
             </NAlert>
-            <NAlert v-else-if="store.state.notices.length" type="warning" class="connection-alert" closable @close="store.dismissNotice">{{ store.state.notices.at(-1) }}</NAlert>
+            <NAlert v-else-if="store.state.notices.length" type="warning" class="connection-alert" closable @close="store.dismissNotice"><div class="connection-alert-content"><span>{{ store.state.notices.at(-1) }}<small v-if="store.state.notices.length > 1"> · 另有 {{ store.state.notices.length - 1 }} 条通知</small></span><NButton v-if="store.state.notices.length > 1" size="tiny" secondary @click="store.dismissAllNotices">全部清除</NButton></div></NAlert>
 
             <NSpin :show="!store.state.initialized" description="正在恢复工作台…" class="workspace-spin">
               <WorkspaceView ref="workspaceView" @open-sessions="openSessions" />

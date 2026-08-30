@@ -23,7 +23,7 @@ Codex Pane 是基于 Codex app-server 的 Windows 11 本机 Codex 工作台。�
 ## 快速开始
 
 1. 确认 PowerShell 7 中可以运行 `codex`。
-2. 打开 `win-unpacked` 目录。
+2. 普通用户运行 `Codex Pane Setup *.exe` 安装；无需安装时可使用 `Codex Pane *.exe` 便携版；开发排查可打开 `win-unpacked` 目录。
 3. 运行 `Codex Pane.exe`，选择默认工作目录。
 
 ## 功能
@@ -53,6 +53,8 @@ npm run dev
 npm run verify
 npm run package:win
 ```
+
+`package:win` 会同时生成可选择安装目录的 NSIS 安装包、便携版和 `win-unpacked` 目录。也可以分别运行 `package:win:installer`、`package:win:portable` 或 `package:win:unpacked`。
 
 ## 许可证
 

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import { NModal } from "naive-ui";
+import { NAlert, NButton, NModal } from "naive-ui";
 import type { PaneState } from "../types";
 import { useWorkspaceStore } from "../stores/workspace";
 import SessionListPanel from "./SessionListPanel.vue";
@@ -13,6 +13,7 @@ const showAll = ref(false);
 const search = ref("");
 const loading = ref(false);
 const switchError = ref<string | null>(null);
+const loadError = ref<string | null>(null);
 let loadSequence = 0;
 const currentCwd = computed(() => props.pane.cwd || store.state.defaultCwd || "");
 const unreadThreadIds = computed(() => [...new Set([
@@ -27,10 +28,11 @@ const load = async (): Promise<void> => {
   if (store.state.connection.phase !== "ready") return;
   const sequence = ++loadSequence;
   loading.value = true;
+  loadError.value = null;
   try {
     await store.loadThreads(search.value, showAll.value ? null : currentCwd.value);
   } catch (error) {
-    if (sequence === loadSequence) props.pane.error = `无法读取会话：${error instanceof Error ? error.message : String(error)}`;
+    if (sequence === loadSequence) loadError.value = `无法读取会话：${error instanceof Error ? error.message : String(error)}`;
   } finally {
     if (sequence === loadSequence) loading.value = false;
   }
@@ -95,6 +97,7 @@ defineExpose({ focusSearch, refresh: load });
       @new-session="newSession"
       @exit="emit('focusConversation')"
     />
+    <NAlert v-if="loadError" type="error" class="session-sidebar-error"><div class="session-sidebar-error-content"><span>{{ loadError }}</span><NButton size="tiny" type="error" secondary @click="load">重试</NButton></div></NAlert>
     <NModal
       :show="switchError !== null"
       preset="dialog"

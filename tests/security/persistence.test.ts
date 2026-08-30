@@ -25,7 +25,7 @@ describe("workspace persistence validation", () => {
     expect(workspaceStateSchema.parse(legacyState).defaultCwd).toBe("");
     expect(workspaceStateSchema.parse(legacyState).workspaceMode).toBe("panes");
     expect(workspaceStateSchema.parse(legacyState).appearance).toEqual({
-      theme: "dark",
+      theme: "system",
       fontFamily: '"Segoe UI", "Microsoft YaHei UI", sans-serif',
       fontSize: 14,
       accentColor: "#10a37f",
@@ -37,6 +37,7 @@ describe("workspace persistence validation", () => {
 
   it("validates persisted appearance settings", () => {
     expect(workspaceStateSchema.parse({ ...validState, appearance: { theme: "light", fontFamily: "Consolas", fontSize: 18, accentColor: "#336699" } }).appearance.theme).toBe("light");
+    expect(workspaceStateSchema.parse({ ...validState, appearance: { theme: "system", fontFamily: "Consolas", fontSize: 18, accentColor: "#336699" } }).appearance.theme).toBe("system");
     expect(workspaceStateSchema.parse({ ...validState, appearance: { theme: "light", fontFamily: "", fontSize: 18, accentColor: "#336699" } }).appearance.fontFamily).toBe("");
     expect(() => workspaceStateSchema.parse({ ...validState, appearance: { theme: "dark", fontFamily: "Consolas", fontSize: 40, accentColor: "red" } })).toThrow();
   });

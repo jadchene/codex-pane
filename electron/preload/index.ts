@@ -3,7 +3,7 @@ import type { AttachmentBatch, ConnectionState, MediaAttachment, ProtocolEvent, 
 import type { WorkspaceState } from "../main/persistence.js";
 
 const api = {
-  bootstrap: (): Promise<{ connection: ConnectionState; workspace: WorkspaceState | null; workspaceWarning?: string | null }> => ipcRenderer.invoke("app:bootstrap"),
+  bootstrap: (): Promise<{ appVersion: string; connection: ConnectionState; workspace: WorkspaceState | null; workspaceWarning?: string | null }> => ipcRenderer.invoke("app:bootstrap"),
   request: (request: SafeRequest): Promise<unknown> => ipcRenderer.invoke("codex:request", request),
   respond: (response: ServerResponse): Promise<void> => ipcRenderer.invoke("codex:respond", response),
   reconnect: (): Promise<void> => ipcRenderer.invoke("codex:reconnect"),
@@ -18,6 +18,7 @@ const api = {
   saveWorkspace: (state: WorkspaceState): Promise<void> => ipcRenderer.invoke("workspace:save", state),
   setFullScreen: (fullScreen: boolean): Promise<void> => ipcRenderer.invoke("window:fullscreen", fullScreen),
   windowControl: (action: "minimize" | "maximize" | "close"): Promise<void> => ipcRenderer.invoke("window:control", action),
+  respondToCloseRequest: (allow: boolean): Promise<void> => ipcRenderer.invoke("window:close-response", allow),
   isMaximized: (): Promise<boolean> => ipcRenderer.invoke("window:is-maximized"),
   openExternal: (url: string): Promise<void> => ipcRenderer.invoke("external:open", url),
   listSystemFonts: (): Promise<string[]> => ipcRenderer.invoke("system:fonts"),
@@ -41,6 +42,11 @@ const api = {
     const handler = (_event: Electron.IpcRendererEvent, maximized: boolean): void => listener(maximized);
     ipcRenderer.on("window:maximized-changed", handler);
     return () => ipcRenderer.removeListener("window:maximized-changed", handler);
+  },
+  onCloseRequested: (listener: () => void): (() => void) => {
+    const handler = (): void => listener();
+    ipcRenderer.on("window:close-requested", handler);
+    return () => ipcRenderer.removeListener("window:close-requested", handler);
   }
 };
 

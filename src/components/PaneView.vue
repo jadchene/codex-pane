@@ -15,6 +15,7 @@ const props = withDefaults(defineProps<{
   focused: boolean;
   pendingRequests: PendingServerRequest[];
   approvalResolving: boolean;
+  connectionReady?: boolean;
   rateLimitLabels: string[];
   paneNumber?: number;
   showTitle?: boolean;
@@ -25,7 +26,7 @@ const props = withDefaults(defineProps<{
   unwrapPowerShellCommands?: boolean;
   mcpGatewayAdaptation?: boolean;
   searchFiles?: (query: string) => Promise<Array<{ name: string; path: string; relativePath: string }>>;
-}>(), { showTitle: true });
+}>(), { showTitle: true, connectionReady: true });
 const emit = defineEmits<{
   send: [];
   interrupt: [];
@@ -55,7 +56,7 @@ const composerCaret = ref(0);
 const restoredThreadId = ref<string | null>(null);
 const slashIndex = ref(-1);
 const fileSuggestions = ref<Array<{ name: string; path: string; relativePath: string }>>([]);
-const fileSearchState = ref<"idle" | "searching" | "ready" | "error">("idle");
+const fileSearchState = ref<"idle" | "needsQuery" | "noRoot" | "searching" | "ready" | "error">("idle");
 const composerMenuDismissed = ref(false);
 const composerHint = ref("");
 const promptHistory = ref<string[]>(readComposerHistory(props.pane.id));
@@ -132,11 +133,17 @@ const goalStatusLabel = computed(() => {
 });
 const activeSubAgentCount = computed(() => Object.values(props.pane.subAgents ?? {}).filter((agent) => ["pendingInit", "running", "unknown"].includes(agent.status)).length);
 const backgroundTaskCount = computed(() => props.pane.backgroundTerminals?.length ?? 0);
+const attachmentCount = computed(() => props.pane.attachments.length + props.pane.references.length);
+const attachmentLimitReached = computed(() => attachmentCount.value >= 20);
+const threadSettingsLocked = computed(() => Boolean(props.pane.activeTurnId || props.pane.status === "starting" || props.pane.status === "interrupting" || props.pendingRequests.length));
+const formatBytes = (value: number): string => value < 1024 ? `${value} B` : value < 1024 * 1024 ? `${(value / 1024).toFixed(1)} KB` : `${(value / 1024 / 1024).toFixed(1)} MB`;
 const composerUnavailable = computed(() => (!props.pane.draft.trim() && props.pane.attachments.length === 0 && props.pane.references.length === 0)
+  || !props.connectionReady
   || !modelSupportsImage.value && props.pane.attachments.length > 0
   || props.pane.status === "starting"
   || props.pane.status === "interrupting");
 const composerDisabledReason = computed(() => {
+  if (!props.connectionReady) return "Codex 尚未连接；连接恢复后即可发送。";
   if (!modelSupportsImage.value && props.pane.attachments.length > 0) return "当前模型不支持图片，请移除图片或切换模型。";
   if (props.pane.status === "starting") return "会话正在启动，请稍候。";
   if (props.pane.status === "interrupting") return "正在停止当前任务，请稍候。";
@@ -164,7 +171,7 @@ const composerDropdownOptions = computed(() => {
     return [{ key: "empty:skill", disabled: true, label: props.pane.skills.length ? "没有匹配的 Skill" : "暂无可用 Skill" }];
   }
   if (composerMenuMode.value === "file" && !fileSuggestions.value.length) {
-    const label = fileSearchState.value === "searching" ? "正在搜索工作区文件…" : fileSearchState.value === "error" ? "文件搜索失败，请重试" : "没有匹配的文件";
+    const label = fileSearchState.value === "needsQuery" ? "继续输入文件名以开始搜索" : fileSearchState.value === "noRoot" ? "请先选择工作目录" : fileSearchState.value === "searching" ? "正在搜索工作区文件…" : fileSearchState.value === "error" ? "文件搜索失败；继续输入以重试" : "没有匹配的文件";
     return [{ key: "empty:file", disabled: true, label }];
   }
   const options = composerMenuMode.value === "skill"
@@ -278,6 +285,10 @@ const submitComposer = (): void => {
   const match = props.pane.draft.trim().match(/^\/(new|resume|cd|cwd|status|compact|review|mcp|skills|agents|permission|permissions|ps|processes|stop|kill-processes|fast|goal|plan|rename)(?:\s+([\s\S]*))?$/i);
   const command = match?.[1]?.toLowerCase();
   if (!command) {
+    if (props.pane.draft.trimStart().startsWith("/")) {
+      composerHint.value = "未识别这个斜杠命令；请从命令菜单选择，或删除开头的 / 后作为普通消息发送。";
+      return;
+    }
     void forceScrollToBottom();
     emit("send");
     return;
@@ -446,6 +457,16 @@ watch([fileQuery, () => props.focused], ([query, focused]) => {
     fileSearchState.value = "idle";
     return;
   }
+  if (!props.pane.cwd && !props.defaultCwd) {
+    fileSuggestions.value = [];
+    fileSearchState.value = "noRoot";
+    return;
+  }
+  if (!query.trim()) {
+    fileSuggestions.value = [];
+    fileSearchState.value = "needsQuery";
+    return;
+  }
   fileSearchState.value = "searching";
   fileSearchTimer = setTimeout(async () => {
     try {
@@ -533,10 +554,11 @@ defineExpose({ focusComposer });
       />
 
       <div v-if="pane.attachments.length || pane.references.length" class="attachment-list">
+        <div class="attachment-summary" role="status"><span>已添加 {{ attachmentCount }} / 20 个附件</span><span v-if="attachmentLimitReached">已达到上限</span></div>
         <div v-for="attachment in pane.attachments" :key="attachment.id" class="attachment-chip">
           <img v-if="attachment.kind === 'local'" :src="attachment.url" alt="" />
           <NIcon v-else :component="LinkOutline" size="20" aria-label="远程图片地址" />
-          <span :title="attachment.kind === 'remote' ? (attachment.sourceUrl ?? attachment.url) : (attachment.sourcePath ?? attachment.name)">{{ attachment.kind === 'remote' ? (attachment.sourceUrl ?? attachment.url) : (attachment.sourcePath ?? attachment.name) }}</span>
+          <span :title="attachment.kind === 'remote' ? (attachment.sourceUrl ?? attachment.url) : (attachment.sourcePath ?? attachment.name)">{{ attachment.kind === 'remote' ? (attachment.sourceUrl ?? attachment.url) : attachment.name }}<small v-if="attachment.size"> · {{ formatBytes(attachment.size) }}</small></span>
           <NButton quaternary circle size="tiny" :aria-label="`移除 ${attachment.name}`" @click="emit('removeAttachment', attachment.id)">×</NButton>
         </div>
         <div v-for="reference in pane.references" :key="reference.id" class="attachment-chip">
@@ -566,17 +588,17 @@ defineExpose({ focusComposer });
           <NTooltip><template #trigger><NButton quaternary circle size="small" aria-label="斜杠命令" @click="openSlashMenu">/</NButton></template>斜杠命令</NTooltip>
           <NTooltip><template #trigger><NButton quaternary circle size="small" aria-label="选择 Skill" @click="openSkillMenu">@</NButton></template>选择 Skill</NTooltip>
           <NTooltip><template #trigger><NButton quaternary circle size="small" aria-label="引用工作区文件" @click="openFileMenu">$</NButton></template>引用工作区文件</NTooltip>
-          <NTooltip><template #trigger><NButton quaternary circle size="small" aria-label="添加附件" @click="emit('chooseAttachments')"><template #icon><NIcon :component="AttachOutline" /></template></NButton></template>添加文件或图片</NTooltip>
-          <NTooltip><template #trigger><NButton text class="cwd-button" aria-label="切换当前工作目录" @click="emit('chooseDirectory')"><template #icon><NIcon :component="FolderOpenOutline" /></template><span class="cwd-text">{{ effectiveCwd }}</span></NButton></template>{{ effectiveCwd }} · 点击切换目录</NTooltip>
+          <NTooltip><template #trigger><span><NButton quaternary circle size="small" aria-label="添加附件" :disabled="attachmentLimitReached" @click="emit('chooseAttachments')"><template #icon><NIcon :component="AttachOutline" /></template></NButton></span></template>{{ attachmentLimitReached ? "已达到 20 个附件上限" : "添加文件或图片" }}</NTooltip>
+          <NTooltip><template #trigger><span><NButton text class="cwd-button" aria-label="切换当前工作目录" :disabled="threadSettingsLocked" @click="emit('chooseDirectory')"><template #icon><NIcon :component="FolderOpenOutline" /></template><span class="cwd-text">{{ effectiveCwd }}</span></NButton></span></template>{{ threadSettingsLocked ? "任务或确认进行中，完成后再切换目录" : `${effectiveCwd} · 点击切换目录` }}</NTooltip>
         </div>
         <div class="composer-selects">
           <div class="content-fit-select model-select-fit">
             <span class="select-width-sizer" aria-hidden="true"><span v-for="label in modelSelectLabels" :key="label">{{ label }}</span></span>
-            <NSelect v-model:value="pane.model" class="compact-select model-select" size="tiny" :options="models" placeholder="模型" aria-label="选择模型" :consistent-menu-width="false" :menu-props="{ class: 'content-fit-select-menu' }" @mousedown.stop @click.stop />
+            <NSelect v-model:value="pane.model" class="compact-select model-select" size="tiny" :options="models" placeholder="模型" aria-label="选择模型" :disabled="threadSettingsLocked" :consistent-menu-width="false" :menu-props="{ class: 'content-fit-select-menu' }" @mousedown.stop @click.stop />
           </div>
           <div class="content-fit-select effort-select-fit">
             <span class="select-width-sizer" aria-hidden="true"><span v-for="label in effortSelectLabels" :key="label">{{ label }}</span></span>
-            <NSelect v-model:value="pane.effort" class="compact-select effort-select" size="tiny" :options="effortOptions" placeholder="推理" aria-label="选择推理强度" :consistent-menu-width="false" :menu-props="{ class: 'content-fit-select-menu' }" @mousedown.stop @click.stop />
+            <NSelect v-model:value="pane.effort" class="compact-select effort-select" size="tiny" :options="effortOptions" placeholder="推理" aria-label="选择推理强度" :disabled="threadSettingsLocked" :consistent-menu-width="false" :menu-props="{ class: 'content-fit-select-menu' }" @mousedown.stop @click.stop />
           </div>
         </div>
         <div class="composer-submit">

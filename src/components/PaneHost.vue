@@ -46,6 +46,7 @@ defineExpose({ focusComposer });
     :focused="store.state.focusedPaneId === pane.id"
     :pending-requests="paneRequests"
     :approval-resolving="approvalResolving"
+    :connection-ready="store.state.connection.phase === 'ready'"
     :rate-limit-labels="store.state.rateLimitLabels"
     :pane-number="index + 1"
     :show-title="store.state.workspaceMode !== 'sessionSidebar'"

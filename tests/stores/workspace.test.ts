@@ -56,7 +56,7 @@ const installApi = (bootstrap: Promise<{ connection: ConnectionState; workspace:
   });
   const respond = vi.fn(async (): Promise<void> => undefined);
   window.codexPane = {
-    bootstrap: () => bootstrap,
+    bootstrap: async () => ({ appVersion: "0.1.3", ...await bootstrap }),
     request,
     respond,
     reconnect: vi.fn(),
@@ -93,6 +93,7 @@ describe("workspace state machine", () => {
     api.emitState(connection("ready"));
     bootstrap.resolve({ connection: connection("starting"), workspace: workspaceWithThread("thread-old") });
     await initialization;
+    expect(store.state.appVersion).toBe("0.1.3");
     expect(store.state.connection.phase).toBe("ready");
     expect(api.request).toHaveBeenCalledWith({
       method: "thread/resume",
@@ -1010,6 +1011,45 @@ describe("workspace state machine", () => {
     expect(store.state.notices.at(-1)).toContain("重新登录");
     await store.loginMcpServer("docs");
     expect(window.codexPane.openExternal).toHaveBeenCalledWith("https://auth.example.com/start");
+  });
+
+  it("presents newer safety, plan, lifecycle, Skill and Windows sandbox notifications", async () => {
+    const api = installApi(Promise.resolve({ connection: connection("ready", 2), workspace: null }));
+    const store = useWorkspaceStore();
+    await store.initialize();
+    const pane = store.state.panes[0]!;
+    pane.threadId = "thread-a";
+
+    api.emitProtocol({ generation: 2, kind: "notification", payload: { method: "guardianWarning", params: { threadId: "thread-a", turnId: "turn-a", message: "该操作需要额外检查" } } });
+    expect(pane.items.at(-1)).toMatchObject({ type: "protocolNotice", data: { title: "安全警告", message: "该操作需要额外检查" } });
+
+    api.emitProtocol({ generation: 2, kind: "notification", payload: { method: "turn/plan/updated", params: { threadId: "thread-a", turnId: "turn-a", explanation: "按顺序完成", plan: [{ step: "检查配置", status: "completed" }, { step: "运行测试", status: "inProgress" }] } } });
+    expect(pane.items.find((item) => item.id === "turn-plan:turn-a")).toMatchObject({ type: "plan", status: "running" });
+    expect(pane.items.find((item) => item.id === "turn-plan:turn-a")?.data.text).toContain("检查配置");
+
+    pane.contextRemainingPercent = 12;
+    api.emitProtocol({ generation: 2, kind: "notification", payload: { method: "thread/compacted", params: { threadId: "thread-a", turnId: "turn-a" } } });
+    expect(pane.contextRemainingPercent).toBeNull();
+    expect(pane.items.at(-1)?.data.title).toBe("上下文已压缩");
+
+    api.emitProtocol({ generation: 2, kind: "notification", payload: { method: "hook/completed", params: { threadId: "thread-a", turnId: "turn-a", run: { status: "failed", eventName: "afterTurn", statusMessage: "Hook 返回失败" } } } });
+    expect(pane.items.at(-1)).toMatchObject({ type: "protocolNotice", data: { title: "Hook 执行异常", message: "Hook 返回失败" } });
+
+    api.emitProtocol({ generation: 2, kind: "notification", payload: { method: "thread/archived", params: { threadId: "thread-a" } } });
+    expect(pane.items.at(-1)?.data.title).toBe("会话已归档");
+    api.emitProtocol({ generation: 2, kind: "notification", payload: { method: "thread/unarchived", params: { threadId: "thread-a" } } });
+    expect(pane.items.at(-1)?.data.title).toBe("会话已取消归档");
+    api.emitProtocol({ generation: 2, kind: "notification", payload: { method: "thread/closed", params: { threadId: "thread-a" } } });
+    expect(pane.items.at(-1)?.data.title).toBe("会话已关闭");
+
+    api.emitProtocol({ generation: 2, kind: "notification", payload: { method: "windowsSandbox/setupCompleted", params: { mode: "elevated", success: true, error: null } } });
+    expect(store.state.notices.at(-1)).toContain("Windows 沙箱已完成配置");
+    api.emitProtocol({ generation: 2, kind: "notification", payload: { method: "skills/changed", params: {} } });
+    await vi.waitFor(() => expect(api.request).toHaveBeenCalledWith({ method: "skills/list", params: { cwds: [], forceReload: false } }));
+
+    api.emitProtocol({ generation: 2, kind: "notification", payload: { method: "thread/deleted", params: { threadId: "thread-a" } } });
+    expect(pane.threadId).toBeNull();
+    expect(pane.error).toContain("已被删除");
   });
 
   it("supports agent and background-process slash commands and item actions", async () => {

@@ -32,6 +32,9 @@ describe("SettingsModal", () => {
     expect(wrapper.text()).toContain("已读取 2 个字体系列");
     wrapper.findAllComponents(NSwitch).at(-1)!.vm.$emit("update:value", true);
     expect(store.state.appearance.mcpGatewayAdaptation).toBe(true);
+    await wrapper.findAll("button").find((button) => button.text() === "恢复默认")!.trigger("click");
+    expect(store.state.appearance).toMatchObject({ theme: "system", fontSize: 14, accentColor: "#10a37f", mcpGatewayAdaptation: false });
+    expect(wrapper.text()).toContain("Codex Pane");
   });
 
   it("offers the multi-pane and session-sidebar workspace modes", () => {
@@ -51,6 +54,8 @@ describe("SettingsModal", () => {
     expect(appearanceThemeOverrides(appearance).common).toMatchObject({ fontFamily: "Microsoft YaHei UI", fontFamilyMono: "Microsoft YaHei UI", fontSize: "18px", fontSizeTiny: "16px", fontSizeSmall: "17px", fontSizeMedium: "18px" });
     expect(appearanceCssVars({ ...appearance, fontFamily: "" })["--app-font-family"]).toContain("Segoe UI");
     expect(appearanceThemeOverrides({ ...appearance, fontFamily: "" }).common?.fontFamily).toContain("Segoe UI");
+    expect(appearanceCssVars({ ...appearance, theme: "system" }, false)["--app-bg"]).toBe("#f3f5f7");
+    expect(appearanceCssVars({ ...appearance, theme: "system" }, true)["--app-bg"]).toBe("#0c0d0f");
   });
 
   it("labels the PowerShell wrapper path clearly, allows it to be cleared, and has an explicit close action", async () => {
@@ -96,6 +101,17 @@ describe("SettingsModal", () => {
     expect(choose).toHaveBeenCalledOnce();
     expect(clear).toHaveBeenCalledOnce();
     expect(wrapper.text()).not.toContain("/cwd");
+  });
+
+  it("keeps Settings open and explains a failed default-directory update", async () => {
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    const store = useWorkspaceStore();
+    vi.spyOn(store, "chooseDefaultDirectory").mockRejectedValue(new Error("目录已被移除"));
+    const wrapper = mount(SettingsModal, { props: { show: true }, global: { plugins: [pinia], stubs: { teleport: true } } });
+    await wrapper.findAll("button").find((button) => button.text().includes("选择目录"))!.trigger("click");
+    await vi.waitFor(() => expect(wrapper.text()).toContain("无法更新运行目录：目录已被移除"));
+    expect(wrapper.emitted("update:show")).toBeUndefined();
   });
 
   it("copies the bounded redacted diagnostics exposed by the desktop contract", async () => {
