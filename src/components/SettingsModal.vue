@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import { NAlert, NAutoComplete, NButton, NCard, NColorPicker, NDescriptions, NDescriptionsItem, NDivider, NForm, NFormItem, NInput, NInputNumber, NModal, NRadioButton, NRadioGroup, NSpace, NSwitch, NTag, NText } from "naive-ui";
+import { NAlert, NButton, NCard, NColorPicker, NDescriptions, NDescriptionsItem, NDivider, NForm, NFormItem, NInput, NInputNumber, NModal, NRadioButton, NRadioGroup, NSelect, NSpace, NSwitch, NTag, NText } from "naive-ui";
 import { useWorkspaceStore } from "../stores/workspace";
 import type { AppearanceSettings, ThemeMode, WorkspaceMode } from "../types";
 
@@ -14,7 +14,7 @@ const updateAppearance = (appearance: Partial<AppearanceSettings>): void => stor
 
 const workspaceMode = computed({ get: () => store.state.workspaceMode, set: (value: WorkspaceMode) => emit("update:workspaceMode", value) });
 const theme = computed({ get: () => store.state.appearance.theme, set: (value: ThemeMode) => updateAppearance({ theme: value }) });
-const fontFamily = computed({ get: () => store.state.appearance.fontFamily, set: (value: string) => updateAppearance({ fontFamily: value }) });
+const fontFamily = computed({ get: () => store.state.appearance.fontFamily, set: (value: string | null) => updateAppearance({ fontFamily: value ?? "" }) });
 const fontSize = computed({
   get: () => store.state.appearance.fontSize,
   set: (value: number | null) => updateAppearance({ fontSize: Math.min(20, Math.max(12, value ?? 14)) })
@@ -29,7 +29,7 @@ const diagnosticsState = ref<"idle" | "copying" | "copied" | "empty" | "error">(
 const diagnosticsError = ref("");
 const runtimeAction = ref<"idle" | "choosing" | "clearing">("idle");
 const runtimeError = ref("");
-const fontOptions = computed(() => systemFonts.value.map((family) => ({ label: family, value: family })));
+const fontOptions = computed(() => [...new Set([fontFamily.value, ...systemFonts.value].filter(Boolean))].map((family) => ({ label: family, value: family })));
 const display = (value: string | null | undefined): string => value || "—";
 const noSpellcheckInputProps = { spellcheck: false, autocorrect: "off", autocapitalize: "off" } as const;
 const loadSystemFonts = async (): Promise<void> => {
@@ -117,11 +117,11 @@ watch(() => props.show, (show) => { if (show) void loadSystemFonts(); }, { immed
           </NFormItem>
           <NFormItem label="界面字体">
             <div class="font-field">
-              <NAutoComplete v-model:value="fontFamily" :options="fontOptions" :input-props="noSpellcheckInputProps" clearable placeholder="输入或选择系统字体，留空使用默认字体" />
+              <NSelect v-model:value="fontFamily" :options="fontOptions" filterable clearable placeholder="选择系统字体，留空使用默认字体" />
               <NText v-if="fontListState === 'loading'" depth="3">正在读取系统字体…</NText>
-              <NText v-else-if="fontListState === 'ready'" depth="3">已读取 {{ systemFonts.length }} 个字体系列，也可以直接输入。</NText>
-              <NText v-else-if="fontListState === 'unavailable'" depth="3">当前环境不支持读取系统字体，请直接输入已安装字体名称。</NText>
-              <NText v-else-if="fontListState === 'denied'" depth="3">未获得系统字体访问权限，请直接输入已安装字体名称。</NText>
+              <NText v-else-if="fontListState === 'ready'" depth="3">已读取 {{ systemFonts.length }} 个字体系列。</NText>
+              <NText v-else-if="fontListState === 'unavailable'" depth="3">当前环境不支持读取系统字体，已保留当前设置。</NText>
+              <NText v-else-if="fontListState === 'denied'" depth="3">未获得系统字体访问权限，已保留当前设置。</NText>
             </div>
           </NFormItem>
           <NFormItem label="字号"><NInputNumber v-model:value="fontSize" :min="12" :max="20" :step="1" /></NFormItem>

@@ -15,13 +15,10 @@ describe("desktop package hardening", () => {
       enableEmbeddedAsarIntegrityValidation: true,
       onlyLoadAppFromAsar: true
     });
-    expect(packageJson.build.win.target).toEqual(expect.arrayContaining(["nsis", "portable", "dir"]));
-    expect(packageJson.build.nsis).toMatchObject({
-      oneClick: false,
-      allowToChangeInstallationDirectory: true,
-      deleteAppDataOnUninstall: false
-    });
-    expect(packageJson.build.portable.requestExecutionLevel).toBe("user");
+    expect(packageJson.scripts["package:win"]).toContain("electron-builder --win dir");
+    expect(packageJson.build.win.target).toEqual(["dir"]);
+    expect(packageJson.build).not.toHaveProperty("nsis");
+    expect(packageJson.build).not.toHaveProperty("portable");
   });
 
   it("waits for the renderer workspace flush before every native window close", async () => {

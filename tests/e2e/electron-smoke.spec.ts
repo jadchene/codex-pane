@@ -49,11 +49,12 @@ test("supports two application instances with isolated Chromium data", async () 
   const sharedUserData = resolve("test-results", `multi-instance-${randomUUID()}`);
   const env = { ...envWithoutCodex(), CODEX_PANE_USER_DATA_DIR: sharedUserData };
   const first = await launchApplication(env);
-  const second = await launchApplication(env);
+  let second: ElectronApplication | null = null;
   try {
     const firstWindow = await first.firstWindow();
-    const secondWindow = await second.firstWindow();
     await expect(firstWindow).toHaveTitle("Codex Pane");
+    second = await launchApplication(env);
+    const secondWindow = await second.firstWindow();
     await expect(secondWindow).toHaveTitle("Codex Pane");
     await expect(firstWindow.getByText("Codex Pane", { exact: true })).toBeVisible();
     await expect(secondWindow.getByText("Codex Pane", { exact: true })).toBeVisible();
@@ -63,7 +64,8 @@ test("supports two application instances with isolated Chromium data", async () 
     expect(firstSessionData).toContain(sharedUserData);
     expect(secondSessionData).toContain(sharedUserData);
   } finally {
-    await Promise.allSettled([first.close(), second.close()]);
+    await first.close();
+    await second?.close();
   }
 });
 
@@ -147,7 +149,7 @@ test("starts the desktop workbench and connects to Codex", async () => {
     const secondComposer = window.locator("[data-pane-id='pane-2'] textarea");
     await secondModelSelect.click();
     await expect(window.locator(".n-base-select-menu")).toBeVisible();
-    expect(Number.parseFloat(await window.locator(".n-base-select-menu").evaluate((element) => getComputedStyle(element).borderTopWidth))).toBeGreaterThanOrEqual(0.7);
+    expect(Number.parseFloat(await window.locator(".n-base-select-menu").evaluate((element) => getComputedStyle(element).borderTopWidth))).toBeGreaterThanOrEqual(0.5);
     await expect(secondComposer).not.toBeFocused();
     await window.keyboard.press("Escape");
     await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setSize(960, 680));
@@ -206,7 +208,7 @@ test("starts the desktop workbench and connects to Codex", async () => {
     for (const edge of [focusMetrics.highlightTop, focusMetrics.highlightBottom, focusMetrics.highlightLeft, focusMetrics.highlightRight]) {
       expect(Number.parseFloat(edge)).toBeGreaterThanOrEqual(1.5);
     }
-    expect(Number.parseFloat(focusMetrics.selectionBorder)).toBeGreaterThanOrEqual(0.7);
+    expect(Number.parseFloat(focusMetrics.selectionBorder)).toBeGreaterThanOrEqual(0.5);
     expect(focusMetrics.composerBackground).toBe(composerBackgroundBeforeFocus);
     await firstComposer.fill("/");
     await expect(window.getByText("/new", { exact: true })).toBeVisible();

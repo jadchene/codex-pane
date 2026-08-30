@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { mount } from "@vue/test-utils";
-import { NAutoComplete, NColorPicker, NInput, NInputNumber, NRadioGroup, NSwitch } from "naive-ui";
+import { NColorPicker, NInput, NInputNumber, NRadioGroup, NSelect, NSwitch } from "naive-ui";
 import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import SettingsModal from "../../src/components/SettingsModal.vue";
@@ -23,13 +23,15 @@ describe("SettingsModal", () => {
     const store = useWorkspaceStore();
     const wrapper = mount(SettingsModal, { props: { show: true }, global: { plugins: [pinia], stubs: { teleport: true } } });
     wrapper.findAllComponents(NRadioGroup).find((group) => group.props("name") === "appearance-theme")!.vm.$emit("update:value", "light");
-    wrapper.getComponent(NAutoComplete).vm.$emit("update:value", "Cascadia Code");
+    wrapper.getComponent(NSelect).vm.$emit("update:value", "Cascadia Code");
     wrapper.getComponent(NInputNumber).vm.$emit("update:value", 18);
     wrapper.getComponent(NColorPicker).vm.$emit("update:value", "#ff3366");
     await wrapper.vm.$nextTick();
     expect(store.state.appearance).toMatchObject({ theme: "light", fontFamily: "Cascadia Code", fontSize: 18, accentColor: "#ff3366" });
     expect((window as typeof window & { queryLocalFonts: ReturnType<typeof vi.fn> }).queryLocalFonts).toHaveBeenCalledOnce();
     expect(wrapper.text()).toContain("已读取 2 个字体系列");
+    wrapper.getComponent(NSelect).vm.$emit("update:value", null);
+    expect(store.state.appearance.fontFamily).toBe("");
     wrapper.findAllComponents(NSwitch).at(-1)!.vm.$emit("update:value", true);
     expect(store.state.appearance.mcpGatewayAdaptation).toBe(true);
     await wrapper.findAll("button").find((button) => button.text() === "恢复默认")!.trigger("click");
