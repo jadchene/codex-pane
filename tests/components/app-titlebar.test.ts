@@ -26,7 +26,7 @@ describe("App titlebar", () => {
     const pinia = createPinia();
     setActivePinia(pinia);
     const store = useWorkspaceStore();
-    store.state.connection = { phase: "ready", generation: 1, codexVersion: "0.149.1", compatible: true, message: "Codex 0.149.1 已连接" };
+    store.state.connection = { phase: "ready", generation: 1, codexVersion: "0.151.0", compatible: false, message: "Codex 0.151.0 已连接；当前版本尚未完成全量兼容验证" };
     store.state.accountLabel = "API 模式";
     const initialize = vi.spyOn(store, "initialize").mockResolvedValue(undefined);
     const setLayout = vi.spyOn(store, "setLayout").mockImplementation(() => undefined);
@@ -46,6 +46,7 @@ describe("App titlebar", () => {
     const titlebar = wrapper.get(".custom-titlebar");
     expect(titlebar.text()).toContain("Codex Pane");
     expect(titlebar.text()).toContain("已连接");
+    expect(titlebar.text()).not.toContain("版本未验证");
     expect(titlebar.text()).not.toContain("API 模式");
     const layoutButton = titlebar.get('button[aria-label="切换窗格布局，当前单窗格"]');
     expect(layoutButton.text()).toBe("");

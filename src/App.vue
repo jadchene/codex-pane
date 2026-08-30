@@ -44,7 +44,6 @@ const themeOverrides = computed(() => appearanceThemeOverrides(store.state.appea
 const appearanceStyle = computed(() => appearanceCssVars(store.state.appearance, systemPrefersDark.value));
 const connectionStatus = computed(() => {
   const phase = store.state.connection.phase;
-  if (phase === "ready" && store.state.connection.compatible === false) return { label: "版本未验证", tone: "working" };
   if (phase === "ready") return { label: "已连接", tone: "ready" };
   if (phase === "starting" || phase === "restarting") return { label: "连接中", tone: "working" };
   if (phase === "error") return { label: "连接异常", tone: "error" };
