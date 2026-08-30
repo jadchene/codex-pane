@@ -7,7 +7,7 @@ import { AppServerSupervisor } from "./app-server-supervisor.js";
 import { FileStore } from "./file-store.js";
 import { MediaStore } from "./media-store.js";
 import { StateStore, type WorkspaceState } from "./persistence.js";
-import { safeRequestSchema, serverResponseSchema, type AttachmentBatch, type ProtocolEvent } from "../shared/contracts.js";
+import { safeRequestSchema, serverResponseSchema, type AttachmentBatch, type FileReference, type MediaAttachment, type ProtocolEvent } from "../shared/contracts.js";
 import { RuntimeProtocolValidator } from "../../packages/protocol/src/runtime-validator.js";
 import { DiagnosticLog } from "./diagnostic-log.js";
 import { useCodexArgsPrefixForTests, useCodexFixtureForTests } from "./codex-process.js";
@@ -15,6 +15,7 @@ import { prepareUserDataLocation } from "./user-data-location.js";
 import { isTrustedRendererUrl, rendererEntryUrl } from "./renderer-trust.js";
 import { fitWindowBounds } from "./window-bounds.js";
 import { mediaRequestId } from "./media-protocol.js";
+import { redactSensitiveText } from "./sensitive-data.js";
 
 protocol.registerSchemesAsPrivileged([
   { scheme: "codex-media", privileges: { secure: true, standard: true, supportFetchAPI: true } }
@@ -150,9 +151,16 @@ const scheduleWindowStateSave = (): void => {
   }, 300);
 };
 
-const transformManagedAttachments = (value: unknown): unknown => {
+const transformManagedAttachments = (value: unknown, depth = 0, budget = { nodes: 50_000 }, ancestors = new WeakSet<object>()): unknown => {
+  if (budget.nodes-- <= 0 || depth > 32) throw new Error("Codex 请求内容过于复杂，已停止处理以保护应用。");
   if (Array.isArray(value)) {
-    return value.map(transformManagedAttachments);
+    if (ancestors.has(value)) throw new Error("Codex 请求内容包含循环引用。");
+    ancestors.add(value);
+    try {
+      return value.map((entry) => transformManagedAttachments(entry, depth + 1, budget, ancestors));
+    } finally {
+      ancestors.delete(value);
+    }
   }
   if (!value || typeof value !== "object") {
     return value;
@@ -171,18 +179,39 @@ const transformManagedAttachments = (value: unknown): unknown => {
   if (record.type === "managedFile" && typeof record.id === "string" && typeof record.name === "string") {
     return { type: "mention", name: record.name, path: fileStore.resolveAttachment(record.id, record.name) };
   }
-  return Object.fromEntries(Object.entries(record).map(([key, entry]) => [key, transformManagedAttachments(entry)]));
+  if (ancestors.has(record)) throw new Error("Codex 请求内容包含循环引用。");
+  ancestors.add(record);
+  try {
+    return Object.fromEntries(Object.entries(record).map(([key, entry]) => [key, transformManagedAttachments(entry, depth + 1, budget, ancestors)]));
+  } finally {
+    ancestors.delete(record);
+  }
 };
 
 const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"]);
 const importAttachmentPaths = async (paths: string[]): Promise<AttachmentBatch> => {
-  const images = [];
-  const files = [];
-  for (const path of paths) {
-    if (IMAGE_EXTENSIONS.has(extname(path).toLocaleLowerCase())) images.push(await mediaStore.importPath(path));
-    else files.push(await fileStore.importPath(path));
-  }
-  return { images, files };
+  const results = new Array<MediaAttachment | FileReference | null>(paths.length).fill(null);
+  const errors = new Array<string | null>(paths.length).fill(null);
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(3, paths.length) }, async () => {
+    while (cursor < paths.length) {
+      const index = cursor++;
+      const path = paths[index]!;
+      try {
+        results[index] = IMAGE_EXTENSIONS.has(extname(path).toLocaleLowerCase())
+          ? await mediaStore.importPath(path)
+          : await fileStore.importPath(path);
+      } catch (error) {
+        errors[index] = `${basename(path)}：${error instanceof Error ? error.message : String(error)}`;
+      }
+    }
+  });
+  await Promise.all(workers);
+  return {
+    images: results.filter((result): result is MediaAttachment => Boolean(result && "url" in result)),
+    files: results.filter((result): result is FileReference => Boolean(result && !('url' in result))),
+    errors: errors.filter((error): error is string => Boolean(error))
+  };
 };
 
 const clipboardFilePaths = async (): Promise<string[]> => {
@@ -393,7 +422,7 @@ const registerIpc = (): void => {
       title: "添加附件（可多选）",
       properties: ["openFile", "multiSelections"]
     });
-    if (result.canceled) return { images: [], files: [] };
+    if (result.canceled) return { images: [], files: [], errors: [] };
     return importAttachmentPaths(result.filePaths.slice(0, Number(rawLimit)));
   });
   ipcMain.handle("attachment:paste", async (event, rawPaths: unknown, rawLimit: unknown) => {
@@ -403,7 +432,7 @@ const registerIpc = (): void => {
     const suggestedPaths = rawPaths.map((path) => resolve(path)).filter((path) => existsSync(path) && statSync(path).isFile());
     const paths = (suggestedPaths.length ? suggestedPaths : await clipboardFilePaths()).slice(0, Number(rawLimit));
     if (paths.length) return importAttachmentPaths(paths);
-    return { images: [await mediaStore.pasteClipboard()], files: [] };
+    return { images: [await mediaStore.pasteClipboard()], files: [], errors: [] };
   });
   ipcMain.handle("media:path", (event, path: unknown) => {
     assertTrustedSender(event);
@@ -564,9 +593,14 @@ app.whenReady().then(async () => {
   protocol.handle("codex-media", async (request) => {
     const id = mediaRequestId(request.url, request.method);
     if (!id) return new Response("Not found", { status: 404, headers: { "Content-Type": "text/plain", "X-Content-Type-Options": "nosniff" } });
-    const bytes = await mediaStore.read(id);
-    const body = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
-    return new Response(body, { headers: { "Content-Type": "image/png", "Cache-Control": "private, max-age=3600", "X-Content-Type-Options": "nosniff" } });
+    try {
+      const bytes = await mediaStore.read(id);
+      const body = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+      return new Response(body, { headers: { "Content-Type": "image/png", "Cache-Control": "private, max-age=3600", "X-Content-Type-Options": "nosniff" } });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") void diagnosticLog.write({ level: "warning", message: "无法读取托管图片", error: error instanceof Error ? error.message : String(error) }).catch(() => undefined);
+      return new Response("Not found", { status: 404, headers: { "Content-Type": "text/plain", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" } });
+    }
   });
   registerIpc();
   await createWindow();
@@ -592,6 +626,11 @@ app.whenReady().then(async () => {
   } catch (error) {
     mainWindow?.webContents.send("codex:state", { ...supervisor.state, phase: "error", message: error instanceof Error ? error.message : String(error) });
   }
+}).catch((error) => {
+  const detail = redactSensitiveText(error instanceof Error ? error.message : String(error), true);
+  dialog.showErrorBox("无法启动 Codex Pane", `应用数据或运行环境初始化失败。\n\n${detail}\n\n请检查数据目录权限和可用磁盘空间后重试。`);
+  if (ownsPrimarySession) removePrimarySessionLock();
+  app.exit(1);
 });
 
 app.on("window-all-closed", () => app.quit());

@@ -1,7 +1,9 @@
-import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { dirname } from "node:path";
 import { z } from "zod";
+
+const MAX_WORKSPACE_BYTES = 8 * 1024 * 1024;
 
 const attachmentSchema = z.object({
   id: z.string().uuid(),
@@ -19,14 +21,14 @@ const attachmentSchema = z.object({
 });
 
 const paneSchema = z.object({
-  id: z.string().min(1),
-  threadId: z.string().nullable(),
-  cwd: z.string(),
+  id: z.string().regex(/^[A-Za-z0-9_-]{1,100}$/),
+  threadId: z.string().min(1).max(512).nullable(),
+  cwd: z.string().max(32_768),
   draft: z.string().max(200_000),
   attachments: z.array(attachmentSchema).max(20),
   references: z.array(z.object({ id: z.string().uuid(), name: z.string().min(1).max(512), path: z.string().min(1).max(32_768), managed: z.boolean().optional() })).max(20).default([]),
-  model: z.string().nullable(),
-  effort: z.string().nullable(),
+  model: z.string().max(200).nullable(),
+  effort: z.string().max(50).nullable(),
   activePermissionProfile: z.string().max(512).nullable().optional(),
   approvalPolicy: z.enum(["untrusted", "on-request", "never"]).nullable().optional(),
   approvalsReviewer: z.enum(["user", "auto_review", "guardian_subagent"]).nullable().optional(),
@@ -40,7 +42,7 @@ export const workspaceStateSchema = z.object({
   version: z.literal(1),
   workspaceMode: z.enum(["panes", "sessionSidebar"]).default("panes"),
   layout: z.enum(["single", "vertical", "horizontal", "quad", "fourColumns", "fourRows", "six"]),
-  splitSizes: z.record(z.array(z.number().min(10).max(90)).min(2).max(4)).default({}),
+  splitSizes: z.record(z.array(z.number().min(10).max(90)).min(2).max(4)).refine((sizes) => Object.keys(sizes).length <= 20, { message: "窗格尺寸配置过多" }).default({}),
   defaultCwd: z.string().max(32_768).default(""),
   appearance: z.object({
     theme: z.enum(["dark", "light"]).default("dark"),
@@ -83,6 +85,8 @@ export class StateStore {
 
   async load(): Promise<WorkspaceState | null> {
     try {
+      const metadata = await stat(this.#path);
+      if (metadata.size > MAX_WORKSPACE_BYTES) throw new Error("工作台状态文件超过安全大小限制");
       const content = await readFile(this.#path, "utf8");
       const state = workspaceStateSchema.parse(JSON.parse(content));
       this.#loadWarning = null;

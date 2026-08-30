@@ -284,10 +284,12 @@ const toolName = computed(() => textValue(firstValue("tool", "toolName", "name")
 const toolDetailFields = computed(() => detailFields(["arguments", "params", "input", "result", "output", "contentItems", "content", "error"]));
 const mcpArguments = computed(() => record.value.arguments);
 const gatewayTarget = computed(() => {
-  if (!props.mcpGatewayAdaptation || String(record.value.server ?? record.value.serverName) !== "gateway" || toolName.value !== "gateway_call_tool") return null;
+  if (!props.mcpGatewayAdaptation || !["gateway_call_tool", "call_tool"].includes(toolName.value)) return null;
   const argumentsRecord = asRecord(mcpArguments.value);
-  const service = typeof argumentsRecord.serviceId === "string" ? argumentsRecord.serviceId : null;
-  const tool = typeof argumentsRecord.toolName === "string" ? argumentsRecord.toolName : null;
+  const service = [argumentsRecord.serviceId, argumentsRecord.service_id, argumentsRecord.server, argumentsRecord.serverName]
+    .find((value): value is string => typeof value === "string" && value.length > 0) ?? null;
+  const tool = [argumentsRecord.toolName, argumentsRecord.tool_name, argumentsRecord.tool]
+    .find((value): value is string => typeof value === "string" && value.length > 0) ?? null;
   return service && tool ? { service, tool } : null;
 });
 const mcpServiceLabel = computed(() => {

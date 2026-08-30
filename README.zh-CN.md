@@ -34,6 +34,10 @@ Codex Pane 是基于 Codex app-server 的 Windows 11 本机 Codex 工作台。�
 - 使用 `/` 选择命令，`@` 使用 Skill，`$` 引用工作区文件。
 - 添加本地文件和图片，也可直接粘贴图片。
 - 在输入区切换模型、推理强度和权限模式。
+- 在设置中复制已脱敏的连接与协议诊断，便于排查问题。
+- 使用 `F11` 进入或退出全屏；全屏时也可按 `Esc` 或点击右上角按钮退出。
+
+批量添加附件时，无法读取的文件会单独报告，已经成功导入的文件会保留。MCP 表单与选项回答都需要明确点击提交，不会在选择时立即发送。
 
 命令：`/agents`、`/cd`、`/compact`、`/fast`、`/goal`、`/mcp`、`/new`、`/permissions`、`/plan`、`/ps`、`/rename`、`/resume`、`/review`、`/skills`、`/status`、`/stop`。
 

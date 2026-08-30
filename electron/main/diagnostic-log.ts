@@ -35,7 +35,7 @@ export class DiagnosticLog {
   async #write(payload: unknown): Promise<void> {
     await mkdir(this.#directory, { recursive: true });
     await this.#rotateIfNeeded();
-    const line = JSON.stringify({ at: new Date().toISOString(), payload: this.#redact(payload) });
+    const line = JSON.stringify({ at: new Date().toISOString(), payload: this.#redact(payload, "", 0, { nodes: 2_000 }) });
     await appendFile(this.#activePath, `${line}\n`, "utf8");
   }
 
@@ -66,13 +66,15 @@ export class DiagnosticLog {
     return path;
   }
 
-  #redact(value: unknown, key = ""): unknown {
+  #redact(value: unknown, key = "", depth = 0, budget = { nodes: 2_000 }): unknown {
+    if (budget.nodes-- <= 0) return "… 已省略其余内容";
     if (/(token|authorization|api.?key|password|secret)/i.test(key)) return "[已隐藏]";
     if (typeof value === "string") {
       return redactSensitiveText(value, true).slice(0, 20_000);
     }
-    if (Array.isArray(value)) return value.slice(0, 100).map((entry) => this.#redact(entry));
-    if (value && typeof value === "object") return Object.fromEntries(Object.entries(value as Record<string, unknown>).slice(0, 100).map(([entryKey, entry]) => [entryKey, this.#redact(entry, entryKey)]));
+    if (depth >= 8 && value && typeof value === "object") return "… 层级过深，已省略";
+    if (Array.isArray(value)) return value.slice(0, 100).map((entry) => this.#redact(entry, "", depth + 1, budget));
+    if (value && typeof value === "object") return Object.fromEntries(Object.entries(value as Record<string, unknown>).slice(0, 100).map(([entryKey, entry]) => [entryKey, this.#redact(entry, entryKey, depth + 1, budget)]));
     return value;
   }
 }

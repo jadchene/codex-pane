@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import { nextTick, ref, watch } from "vue";
-import { NButton } from "naive-ui";
+import { NAlert, NButton } from "naive-ui";
 import { CloseOutline } from "@vicons/ionicons5";
 import type { PaneState, ThreadSummary } from "../types";
 import SessionListPanel from "./SessionListPanel.vue";
 
-const props = defineProps<{ show: boolean; pane: PaneState | null; threads: ThreadSummary[]; showAll: boolean; currentCwd: string }>();
+const props = withDefaults(defineProps<{ show: boolean; pane: PaneState | null; threads: ThreadSummary[]; showAll: boolean; currentCwd: string; loading?: boolean; error?: string }>(), { loading: false, error: "" });
 const emit = defineEmits<{
   "update:show": [value: boolean];
   search: [value: string];
@@ -29,6 +29,7 @@ watch(() => props.show, (show) => {
         :active-thread-id="pane.threadId"
         :show-all="showAll"
         :current-cwd="currentCwd"
+        :loading="loading"
         show-resume-button
         search-placeholder="按标题或内容搜索历史会话"
         show-all-label="显示全部"
@@ -37,6 +38,7 @@ watch(() => props.show, (show) => {
         @scope="changeScope"
         @resume="emit('resume', $event)"
       />
+      <NAlert v-if="error" type="error" class="session-drawer-error">{{ error }}</NAlert>
     </section>
   </Teleport>
 </template>

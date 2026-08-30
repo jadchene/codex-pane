@@ -122,4 +122,5 @@ export type FileReference = {
 export type AttachmentBatch = {
   images: MediaAttachment[];
   files: FileReference[];
+  errors: string[];
 };

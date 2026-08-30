@@ -13,6 +13,8 @@ const MAX_MEDIA_BYTES = 500 * 1024 * 1024;
 
 export class MediaStore {
   readonly #directory: string;
+  #maintenancePromise: Promise<void> | null = null;
+  #maintenanceRequested = false;
 
   constructor(directory: string) {
     this.#directory = resolve(directory);
@@ -24,6 +26,26 @@ export class MediaStore {
 
   async initialize(): Promise<void> {
     await mkdir(this.#directory, { recursive: true });
+    await this.#scheduleMaintenance();
+  }
+
+  #scheduleMaintenance(): Promise<void> {
+    this.#maintenanceRequested = true;
+    if (this.#maintenancePromise) return this.#maintenancePromise;
+    const operation = (async () => {
+      while (this.#maintenanceRequested) {
+        this.#maintenanceRequested = false;
+        await this.#enforceRetentionAndQuota();
+      }
+    })();
+    const tracked = operation.finally(() => {
+      if (this.#maintenancePromise === tracked) this.#maintenancePromise = null;
+    });
+    this.#maintenancePromise = tracked;
+    return tracked;
+  }
+
+  async #enforceRetentionAndQuota(): Promise<void> {
     const entries = await readdir(this.#directory, { withFileTypes: true });
     const files: Array<{ path: string; mtimeMs: number; size: number }> = [];
     for (const entry of entries) {
@@ -32,7 +54,9 @@ export class MediaStore {
       if (dirname(path) !== this.#directory) continue;
       const metadata = await stat(path);
       if (metadata.mtimeMs < Date.now() - MEDIA_RETENTION_MS) {
-        await unlink(path);
+        await unlink(path).catch((error) => {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        });
       } else {
         files.push({ path, mtimeMs: metadata.mtimeMs, size: metadata.size });
       }
@@ -40,7 +64,9 @@ export class MediaStore {
     let totalBytes = files.reduce((sum, file) => sum + file.size, 0);
     for (const file of files.sort((left, right) => left.mtimeMs - right.mtimeMs)) {
       if (totalBytes <= MAX_MEDIA_BYTES) break;
-      await unlink(file.path);
+      await unlink(file.path).catch((error) => {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      });
       totalBytes -= file.size;
     }
   }
@@ -75,6 +101,7 @@ export class MediaStore {
       if (existing.isFile()) {
         const now = new Date();
         await utimes(existingPath, now, now);
+        await this.#scheduleMaintenance();
         return { id, name: basename(normalizedPath, extname(normalizedPath)) + ".png", url: `codex-media://media/${id}`, size: existing.size, kind: "local", sourcePath: existingPath };
       }
     } catch (error) {
@@ -112,10 +139,14 @@ export class MediaStore {
     const sourcePath = join(this.#directory, `${id}.png`);
     try {
       await writeFile(sourcePath, bytes, { flag: "wx" });
+      await this.#scheduleMaintenance();
       return { id, name, url: `codex-media://media/${id}`, size: bytes.byteLength, kind: "local", sourcePath };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
       const existing = await stat(sourcePath);
+      const now = new Date();
+      await utimes(sourcePath, now, now);
+      await this.#scheduleMaintenance();
       return { id, name, url: `codex-media://media/${id}`, size: existing.size, kind: "local", sourcePath };
     }
   }

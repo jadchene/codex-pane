@@ -208,7 +208,7 @@ export class AppServerSupervisor extends EventEmitter {
     const request = { id, method, params };
     const validation = this.#validator?.validateClientRequest(request);
     if (validation && !validation.valid) {
-      return Promise.reject(new Error(`Codex 请求参数不符合 0.149.1 固定协议：${method}`));
+      return Promise.reject(new Error(`Codex 请求参数不符合 ${BASELINE.codexVersion} 固定协议：${method}`));
     }
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -229,7 +229,7 @@ export class AppServerSupervisor extends EventEmitter {
   notify(method: string, params?: unknown): void {
     const notification = params === undefined ? { method } : { method, params };
     const validation = this.#validator?.validateClientNotification(notification);
-    if (validation && !validation.valid) throw new Error(`Codex 通知不符合 0.149.1 固定协议：${method}`);
+    if (validation && !validation.valid) throw new Error(`Codex 通知不符合 ${BASELINE.codexVersion} 固定协议：${method}`);
     this.#write(notification);
   }
 
@@ -275,7 +275,7 @@ export class AppServerSupervisor extends EventEmitter {
       if (this.#deltaNotifications.size) this.#flushDeltaNotifications();
       const validation = this.#validator?.validateServerRequest(envelope);
       if (validation && !validation.valid) {
-        this.#emitProtocol("diagnostic", { level: "warning", message: `Codex 服务请求参数不符合 0.149.1 Schema：${envelope.method}`, errors: validation.errors.slice(0, 5) });
+        this.#emitProtocol("diagnostic", { level: "warning", message: `Codex 服务请求参数不符合 ${BASELINE.codexVersion} Schema：${envelope.method}`, errors: validation.errors.slice(0, 5) });
         this.#write({ id: envelope.id, error: { code: -32602, message: "Codex Pane 无法安全处理格式不完整的服务请求。" } });
         return;
       }

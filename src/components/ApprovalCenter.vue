@@ -45,8 +45,6 @@ const elicitationFields = computed(() => {
 const availableDecisions = computed(() => Array.isArray(params.value.availableDecisions)
   ? params.value.availableDecisions
   : ["accept", "acceptForSession", "decline", "cancel"]);
-const choiceOnlyQuestions = computed(() => questions.value.length > 0 && questions.value.every((question) => Array.isArray(question.options) && question.options.length > 0 && !question.isOther));
-const singleChoiceElicitation = computed(() => params.value.mode === "form" && elicitationFields.value.length === 1 && elicitationFields.value[0]?.schema.type !== "array" && fieldOptions(elicitationFields.value[0]?.schema ?? {}).length > 0);
 const asRecord = (value: unknown): Record<string, unknown> => value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 const permissionProfile = computed(() => asRecord(params.value.permissions ?? params.value.additionalPermissions));
 const networkPermission = computed(() => asRecord(permissionProfile.value.network));
@@ -73,7 +71,19 @@ const redactForDisplay = (value: unknown, key = "", depth = 0): unknown => {
   if (depth > 7 && value && typeof value === "object") return "…已省略";
   if (Array.isArray(value)) return value.slice(0, 100).map((entry) => redactForDisplay(entry, "", depth + 1));
   if (value && typeof value === "object") return Object.fromEntries(Object.entries(value as Record<string, unknown>).slice(0, 100).map(([entryKey, entry]) => [entryKey, redactForDisplay(entry, entryKey, depth + 1)]));
-  if (typeof value === "string") return value.replace(/Bearer\s+\S+/gi, "Bearer [已隐藏]").replace(/sk-[A-Za-z0-9_-]{12,}/g, "sk-[已隐藏]");
+  if (typeof value === "string") return value
+    .replace(/https?:\/\/[^\s<>"')\]]+/gi, (rawUrl) => {
+      try {
+        const url = new URL(rawUrl);
+        for (const queryKey of [...url.searchParams.keys()]) url.searchParams.set(queryKey, "[已隐藏]");
+        return url.toString();
+      } catch {
+        return rawUrl;
+      }
+    })
+    .replace(/Bearer\s+\S+/gi, "Bearer [已隐藏]")
+    .replace(/sk-[A-Za-z0-9_-]{12,}/g, "sk-[已隐藏]")
+    .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, "[JWT 已隐藏]");
   return value;
 };
 const commandActionLabel = (action: Record<string, unknown>): string => {
@@ -84,7 +94,7 @@ const safeJson = (value: unknown): string => JSON.stringify(redactForDisplay(val
 const displayPath = (value: unknown): string => typeof value === "string" ? value : safeJson(value);
 const shellArgument = (value: unknown): string => {
   const argument = String(redactForDisplay(value));
-  return /[\s"']/u.test(argument) ? `"${argument.replaceAll('"', '\\"')}"` : argument;
+  return /[\s"'`$;]/u.test(argument) ? `'${argument.replaceAll("'", "''")}'` : argument;
 };
 const commandDisplay = computed(() => Array.isArray(params.value.command)
   ? params.value.command.map(shellArgument).join(" ")
@@ -136,12 +146,6 @@ const submitAnswers = (): void => {
 const chooseAnswer = (question: Record<string, unknown>, value: string): void => {
   const id = String(question.id ?? "");
   answers[id] = value;
-  if (!choiceOnlyQuestions.value || !activeRequest.value) return;
-  const complete = questions.value.every((candidate) => {
-    const candidateId = String(candidate.id ?? "");
-    return candidateId === id ? Boolean(value) : Boolean(answers[candidateId]);
-  });
-  if (complete) submitAnswers();
 };
 
 const acceptPermissions = (scope: "turn" | "session"): void => {
@@ -162,9 +166,37 @@ const submitElicitation = (action: "accept" | "decline" | "cancel"): void => {
     if (params.value.mode === "url") {
       content = null;
     } else if (params.value.mode === "form") {
-      const missing = elicitationFields.value.find((field) => field.required && (elicitationValues[field.name] === undefined || elicitationValues[field.name] === ""));
+      const missing = elicitationFields.value.find((field) => {
+        const value = elicitationValues[field.name];
+        return field.required && (value === undefined || value === "" || Array.isArray(value) && value.length === 0);
+      });
       if (missing) {
         formError.value = `请填写${String(missing.schema.title ?? missing.name)}。`;
+        return;
+      }
+      const invalid = elicitationFields.value.map((field) => {
+        const value = elicitationValues[field.name];
+        const label = String(field.schema.title ?? field.name);
+        if (typeof value === "string") {
+          if (typeof field.schema.minLength === "number" && value.length < field.schema.minLength) return `${label}至少需要 ${field.schema.minLength} 个字符。`;
+          if (typeof field.schema.maxLength === "number" && value.length > field.schema.maxLength) return `${label}不能超过 ${field.schema.maxLength} 个字符。`;
+          if (typeof field.schema.pattern === "string") {
+            try { if (!new RegExp(field.schema.pattern).test(value)) return `${label}格式不符合要求。`; } catch { return `${label}的格式规则无效，请拒绝此请求并检查 MCP 服务。`; }
+          }
+        }
+        if (typeof value === "number") {
+          if (field.schema.type === "integer" && !Number.isInteger(value)) return `${label}必须是整数。`;
+          if (typeof field.schema.minimum === "number" && value < field.schema.minimum) return `${label}不能小于 ${field.schema.minimum}。`;
+          if (typeof field.schema.maximum === "number" && value > field.schema.maximum) return `${label}不能大于 ${field.schema.maximum}。`;
+        }
+        if (Array.isArray(value)) {
+          if (typeof field.schema.minItems === "number" && value.length < field.schema.minItems) return `${label}至少选择 ${field.schema.minItems} 项。`;
+          if (typeof field.schema.maxItems === "number" && value.length > field.schema.maxItems) return `${label}最多选择 ${field.schema.maxItems} 项。`;
+        }
+        return "";
+      }).find(Boolean);
+      if (invalid) {
+        formError.value = invalid;
         return;
       }
       content = Object.fromEntries(elicitationFields.value
@@ -203,8 +235,6 @@ const fieldStringValue = (name: string): string => typeof elicitationValues[name
 const updateField = (name: string, value: unknown): void => { elicitationValues[name] = value; };
 const chooseElicitationOption = (field: { name: string }, value: string): void => {
   updateField(field.name, value);
-  if (!singleChoiceElicitation.value || !activeRequest.value) return;
-  emit("resolve", activeRequest.value, { action: "accept", content: { [field.name]: value }, _meta: params.value._meta ?? null });
 };
 
 const handleKeydown = (event: KeyboardEvent): void => {
@@ -308,7 +338,7 @@ const openElicitationUrl = async (): Promise<void> => {
               </NFormItem>
             </NForm>
             <NAlert v-if="formError" type="error">{{ formError }}</NAlert>
-            <div v-if="!choiceOnlyQuestions" class="approval-actions"><NButton type="primary" @click="submitAnswers">提交回答</NButton></div>
+            <div class="approval-actions"><NButton type="primary" @click="submitAnswers">提交回答</NButton></div>
           </template>
 
           <template v-else-if="activeRequest.method === 'mcpServer/elicitation/request'">
@@ -318,7 +348,7 @@ const openElicitationUrl = async (): Promise<void> => {
             <NForm v-else-if="params.mode === 'form'" label-placement="top">
               <NFormItem v-for="field in elicitationFields" :key="field.name" :label="`${String(field.schema.title ?? field.name)}${field.required ? ' *' : ''}`" :feedback="String(field.schema.description ?? '')">
                 <NSwitch v-if="field.schema.type === 'boolean'" :value="fieldBooleanValue(field.name)" @update:value="updateField(field.name, $event)" />
-                <NInputNumber v-else-if="field.schema.type === 'number' || field.schema.type === 'integer'" :value="fieldNumberValue(field.name)" :min="field.schema.minimum as number | undefined" :max="field.schema.maximum as number | undefined" @update:value="updateField(field.name, $event)" />
+                <NInputNumber v-else-if="field.schema.type === 'number' || field.schema.type === 'integer'" :value="fieldNumberValue(field.name)" :precision="field.schema.type === 'integer' ? 0 : undefined" :min="field.schema.minimum as number | undefined" :max="field.schema.maximum as number | undefined" @update:value="updateField(field.name, $event)" />
                 <NSpace v-else-if="fieldOptions(field.schema).length && field.schema.type !== 'array'" vertical><NButton v-for="option in fieldOptions(field.schema)" :key="option.value" :type="fieldSelectValue(field.name) === option.value ? 'primary' : 'default'" @click="chooseElicitationOption(field, option.value)">{{ option.label }}</NButton></NSpace>
                 <NSelect v-else-if="fieldOptions(field.schema).length" :value="fieldSelectValue(field.name)" multiple :options="fieldOptions(field.schema)" @update:value="updateField(field.name, $event)" />
                 <NInput v-else :value="fieldStringValue(field.name)" :input-props="noSpellcheckInputProps" :type="field.schema.format === 'password' ? 'password' : 'text'" :maxlength="field.schema.maxLength as number | undefined" @update:value="updateField(field.name, $event)" />
@@ -328,7 +358,7 @@ const openElicitationUrl = async (): Promise<void> => {
               <NInput v-model:value="formJson" type="textarea" :input-props="noSpellcheckInputProps" :autosize="{ minRows: 5, maxRows: 14 }" />
             </NFormItem>
             <NAlert v-if="formError" type="error">{{ formError }}</NAlert>
-            <NSpace v-if="!singleChoiceElicitation" class="approval-actions">
+            <NSpace class="approval-actions">
               <NButton type="primary" @click="submitElicitation('accept')">{{ params.mode === 'url' ? '已完成，继续' : '提交' }}</NButton>
               <NButton type="error" secondary @click="submitElicitation('decline')">拒绝</NButton>
               <NButton @click="submitElicitation('cancel')">取消</NButton>

@@ -116,7 +116,8 @@ defineExpose({ focusSearch });
               <div class="session-meta">
                 <NText depth="3" class="session-cwd">{{ thread.cwd || "—" }}</NText>
                 <span class="session-meta-dot">·</span>
-                <NTime class="session-time" :time="thread.updatedAt * 1000" type="relative" />
+                <NTime v-if="thread.updatedAt > 0" class="session-time" :time="thread.updatedAt * 1000" type="relative" />
+                <span v-else class="session-time">时间未知</span>
               </div>
               <span v-if="thread.name && thread.preview && thread.preview !== thread.name" class="session-preview">{{ thread.preview }}</span>
               </div>

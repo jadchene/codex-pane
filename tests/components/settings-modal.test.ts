@@ -97,4 +97,19 @@ describe("SettingsModal", () => {
     expect(clear).toHaveBeenCalledOnce();
     expect(wrapper.text()).not.toContain("/cwd");
   });
+
+  it("copies the bounded redacted diagnostics exposed by the desktop contract", async () => {
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    const store = useWorkspaceStore();
+    store.state.connection = { phase: "ready", generation: 2, codexVersion: "0.149.1", compatible: true, message: "连接正常" };
+    const readDiagnostics = vi.fn().mockResolvedValue(["line 1", "line 2"]);
+    const copyText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(window, "codexPane", { configurable: true, value: { readDiagnostics, copyText, listSystemFonts: vi.fn().mockResolvedValue([]) } });
+    const wrapper = mount(SettingsModal, { props: { show: true }, global: { plugins: [pinia], stubs: { teleport: true } } });
+    await wrapper.findAll("button").find((button) => button.text().includes("复制脱敏诊断"))!.trigger("click");
+    await vi.waitFor(() => expect(copyText).toHaveBeenCalledWith("line 1\nline 2"));
+    expect(wrapper.text()).toContain("诊断信息已复制到剪贴板");
+    expect(wrapper.text()).toContain("Codex 版本");
+  });
 });

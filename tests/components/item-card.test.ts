@@ -12,6 +12,8 @@ const messageApi = { success: vi.fn(), error: vi.fn() };
 
 config.global.stubs = {
   MarkdownContent: { props: ["source"], template: "<div>{{ source }}</div>" },
+  NCode: { props: ["code"], template: "<code>{{ code }}</code>" },
+  Code: { props: ["code"], template: "<code>{{ code }}</code>" },
   NTooltip: { template: "<span><slot name='trigger' /><slot /></span>" }
 };
 config.global.provide = { [messageApiInjectionKey as symbol]: messageApi };
@@ -221,6 +223,9 @@ describe("ItemCard compact structured views", () => {
     const enabled = mount(ItemCard, { props: { item: gatewayCall, mcpGatewayAdaptation: true } });
     expect(enabled.text()).toContain("gateway → database");
     expect(enabled.text()).toContain("gateway_call_tool → list_databases");
+    const aliased = mount(ItemCard, { props: { item: item("mcpToolCall", { server: "company-gateway", tool: "call_tool", arguments: { service_id: "docs", tool_name: "search" } }), mcpGatewayAdaptation: true } });
+    expect(aliased.text()).toContain("company-gateway → docs");
+    expect(aliased.text()).toContain("call_tool → search");
     expect(enabled.text()).toContain("0.1 秒");
   });
 

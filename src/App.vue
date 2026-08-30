@@ -18,6 +18,9 @@ const fullScreen = ref(false);
 const maximized = ref(false);
 const sessionsOpen = ref(false);
 const sessionsShowAll = ref(false);
+const sessionsLoading = ref(false);
+const sessionsError = ref("");
+let sessionLoadSequence = 0;
 const settingsOpen = ref(false);
 const sessionPaneId = ref<string | null>(null);
 const sessionPane = computed(() => store.state.panes.find((pane) => pane.id === sessionPaneId.value) ?? null);
@@ -39,6 +42,7 @@ const themeOverrides = computed(() => appearanceThemeOverrides(store.state.appea
 const appearanceStyle = computed(() => appearanceCssVars(store.state.appearance));
 const connectionStatus = computed(() => {
   const phase = store.state.connection.phase;
+  if (phase === "ready" && store.state.connection.compatible === false) return { label: "版本未验证", tone: "working" };
   if (phase === "ready") return { label: "已连接", tone: "ready" };
   if (phase === "starting" || phase === "restarting") return { label: "连接中", tone: "working" };
   if (phase === "error") return { label: "连接异常", tone: "error" };
@@ -126,9 +130,26 @@ const selectWorkspaceMode = (workspaceMode: WorkspaceMode): void => {
 const toggleFullScreen = async (): Promise<void> => {
   await window.codexPane.setFullScreen(!fullScreen.value);
 };
+const exitFullScreen = async (): Promise<void> => window.codexPane.setFullScreen(false);
 
 const controlWindow = async (action: "minimize" | "maximize" | "close"): Promise<void> => {
+  if (action === "close") {
+    try {
+      await store.flushSave();
+    } catch {
+      // Keep the window open so the pane can show the save failure and the user can retry or copy the draft.
+      return;
+    }
+  }
   await window.codexPane.windowControl(action);
+};
+
+const requestReconnect = async (): Promise<void> => {
+  try {
+    await store.reconnect();
+  } catch {
+    // The store turns the failure into a persistent connection error and notice.
+  }
 };
 
 const openSessions = async (paneId: string): Promise<void> => {
@@ -140,28 +161,29 @@ const openSessions = async (paneId: string): Promise<void> => {
   }
   sessionsOpen.value = true;
   sessionsShowAll.value = !sessionFilterCwd.value;
+  await loadSessionDrawer("", sessionsShowAll.value);
+};
+
+const loadSessionDrawer = async (search: string, showAll: boolean): Promise<void> => {
+  const sequence = ++sessionLoadSequence;
+  sessionsLoading.value = true;
+  sessionsError.value = "";
   try {
-    await store.loadThreads("", sessionsShowAll.value ? null : sessionFilterCwd.value);
+    await store.loadThreads(search, showAll ? null : sessionFilterCwd.value);
   } catch (error) {
-    if (sessionPane.value) sessionPane.value.error = `无法读取历史会话：${error instanceof Error ? error.message : String(error)}`;
+    if (sequence === sessionLoadSequence) sessionsError.value = `无法读取历史会话：${error instanceof Error ? error.message : String(error)}`;
+  } finally {
+    if (sequence === sessionLoadSequence) sessionsLoading.value = false;
   }
 };
 
 const searchSessions = async (value: string): Promise<void> => {
-  try {
-    await store.loadThreads(value, sessionsShowAll.value ? null : sessionFilterCwd.value);
-  } catch (error) {
-    if (sessionPane.value) sessionPane.value.error = `无法搜索历史会话：${error instanceof Error ? error.message : String(error)}`;
-  }
+  await loadSessionDrawer(value, sessionsShowAll.value);
 };
 
 const changeSessionScope = async (showAll: boolean, search: string): Promise<void> => {
   sessionsShowAll.value = showAll;
-  try {
-    await store.loadThreads(search, showAll ? null : sessionFilterCwd.value);
-  } catch (error) {
-    if (sessionPane.value) sessionPane.value.error = `无法读取历史会话：${error instanceof Error ? error.message : String(error)}`;
-  }
+  await loadSessionDrawer(search, showAll);
 };
 
 const resumeSession = async (threadId: string): Promise<void> => {
@@ -174,6 +196,8 @@ const resumeSession = async (threadId: string): Promise<void> => {
   }
 };
 const closeSessions = async (): Promise<void> => {
+  sessionLoadSequence += 1;
+  sessionsLoading.value = false;
   sessionsOpen.value = false;
   await nextTick();
   await workspaceView.value?.focusPaneById(sessionPaneId.value);
@@ -182,6 +206,16 @@ const closeSessions = async (): Promise<void> => {
 let removeFullscreenListener: (() => void) | null = null;
 let removeMaximizedListener: (() => void) | null = null;
 const handleGlobalKeydown = (event: KeyboardEvent): void => {
+  if (event.key === "F11" && !event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey) {
+    event.preventDefault();
+    void toggleFullScreen();
+    return;
+  }
+  if (event.key === "Escape" && fullScreen.value && !event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey) {
+    event.preventDefault();
+    void window.codexPane.setFullScreen(false);
+    return;
+  }
   if (event.key.toLowerCase() !== "m" || !event.ctrlKey || !event.shiftKey || event.altKey || event.metaKey) return;
   event.preventDefault();
   selectWorkspaceMode(store.state.workspaceMode === "panes" ? "sessionSidebar" : "panes");
@@ -222,7 +256,7 @@ onUnmounted(() => {
         <div class="app-root" :class="{ 'app-root-fullscreen': fullScreen }" :style="appearanceStyle">
           <NLayout class="app-shell">
             <NLayoutHeader v-if="!fullScreen" class="topbar custom-titlebar" bordered>
-              <div class="titlebar-identity"><img :src="appIconUrl" alt="" /><span>Codex Pane</span><span class="titlebar-status" :class="`titlebar-status-${connectionStatus.tone}`" role="status"><i />{{ connectionStatus.label }}</span></div>
+              <div class="titlebar-identity"><img :src="appIconUrl" alt="" /><span>Codex Pane</span><NTooltip><template #trigger><span class="titlebar-status" :class="`titlebar-status-${connectionStatus.tone}`" role="status"><i />{{ connectionStatus.label }}</span></template>{{ store.state.connection.message }}<template v-if="store.state.connection.codexVersion"> · Codex {{ store.state.connection.codexVersion }}</template></NTooltip></div>
               <div class="titlebar-drag-region" aria-hidden="true" />
               <div class="titlebar-actions">
                 <NButtonGroup class="workspace-mode-switch" size="tiny" aria-label="工作台模式">
@@ -233,8 +267,8 @@ onUnmounted(() => {
                 <NDropdown v-if="store.state.workspaceMode === 'panes'" trigger="click" :options="layoutOptions" @select="selectLayout">
                   <NButton quaternary circle size="small" :aria-label="`切换窗格布局，当前${layoutLabels[store.state.layout]}`"><template #icon><NIcon :component="GridOutline" /></template></NButton>
                 </NDropdown>
-                <NTooltip><template #trigger><NButton quaternary circle size="small" aria-label="重新连接 app-server" @click="store.reconnect"><template #icon><NIcon :component="ReloadOutline" /></template></NButton></template>重新连接 app-server</NTooltip>
-                <NTooltip><template #trigger><NButton quaternary circle size="small" :aria-label="fullScreen ? '退出全屏' : '全屏'" @click="toggleFullScreen"><template #icon><NIcon :component="ScanOutline" /></template></NButton></template>{{ fullScreen ? "退出全屏" : "全屏" }}</NTooltip>
+                <NTooltip><template #trigger><NButton quaternary circle size="small" aria-label="重新连接 app-server" :loading="store.state.connection.phase === 'starting' || store.state.connection.phase === 'restarting'" :disabled="store.state.connection.phase === 'starting' || store.state.connection.phase === 'restarting'" @click="requestReconnect"><template #icon><NIcon :component="ReloadOutline" /></template></NButton></template>重新连接 app-server</NTooltip>
+                <NTooltip><template #trigger><NButton quaternary circle size="small" :aria-label="fullScreen ? '退出全屏' : '全屏'" @click="toggleFullScreen"><template #icon><NIcon :component="ScanOutline" /></template></NButton></template>{{ fullScreen ? "退出全屏" : "全屏" }} · F11</NTooltip>
               </div>
               <div class="window-controls">
                 <NButton quaternary class="window-control" aria-label="最小化" @click="controlWindow('minimize')"><span class="window-glyph window-glyph-minimize" /></NButton>
@@ -244,7 +278,7 @@ onUnmounted(() => {
             </NLayoutHeader>
 
             <NAlert v-if="store.state.connection.phase === 'error'" type="error" class="connection-alert" :title="store.state.connection.message">
-              <div class="connection-alert-content"><span>请确认终端中可以运行 codex --version。</span><NButton size="small" type="error" secondary @click="store.reconnect">重新连接</NButton></div>
+              <div class="connection-alert-content"><span>请确认终端中可以运行 codex --version。</span><NButton size="small" type="error" secondary @click="requestReconnect">重新连接</NButton></div>
             </NAlert>
             <NAlert v-else-if="store.state.notices.length" type="warning" class="connection-alert" closable @close="store.dismissNotice">{{ store.state.notices.at(-1) }}</NAlert>
 
@@ -253,7 +287,9 @@ onUnmounted(() => {
             </NSpin>
           </NLayout>
 
-          <SessionDrawer :show="sessionsOpen" :pane="sessionPane" :threads="store.state.threads" :show-all="sessionsShowAll" :current-cwd="sessionFilterCwd" @update:show="value => value ? sessionsOpen = true : closeSessions()" @search="searchSessions" @scope="changeSessionScope" @resume="resumeSession" />
+          <NTooltip v-if="fullScreen" placement="left"><template #trigger><NButton class="fullscreen-exit" circle secondary aria-label="退出全屏" @click="exitFullScreen"><template #icon><NIcon :component="ScanOutline" /></template></NButton></template>退出全屏 · Esc 或 F11</NTooltip>
+
+          <SessionDrawer :show="sessionsOpen" :pane="sessionPane" :threads="store.state.threads" :show-all="sessionsShowAll" :current-cwd="sessionFilterCwd" :loading="sessionsLoading" :error="sessionsError" @update:show="value => value ? sessionsOpen = true : closeSessions()" @search="searchSessions" @scope="changeSessionScope" @resume="resumeSession" />
           <SettingsModal :command-shell-path="store.state.appearance.commandShellPath" :show="settingsOpen" @update:command-shell-path="store.updateAppearance({ commandShellPath: $event })" @update:workspace-mode="selectWorkspaceMode" @update:show="settingsOpen = $event" />
           <NModal :show="pendingLayout !== null" preset="card" title="选择要保留的窗格" class="layout-reduction-modal" :mask-closable="false" @update:show="value => { if (!value) pendingLayout = null; }">
             <NSpace vertical :size="14">
@@ -279,6 +315,8 @@ onUnmounted(() => {
 <style>
 .app-root { width: 100%; height: 100%; color: var(--app-text); background: var(--app-bg); font-family: var(--app-font-family); font-size: var(--app-font-size); }
 .app-root, .app-root :where(button, input, textarea, select, code, pre) { font-family: var(--app-font-family); }
+.fullscreen-exit { position: fixed; z-index: 100; top: 10px; right: 10px; border-color: var(--app-control-border) !important; background: color-mix(in srgb, var(--app-surface) 86%, transparent) !important; box-shadow: 0 5px 18px rgb(0 0 0 / 28%); opacity: .58; backdrop-filter: blur(10px); transition: opacity .15s ease; }
+.fullscreen-exit:hover, .fullscreen-exit:focus-visible { opacity: 1; }
 .app-shell > .n-layout-scroll-container { height: 100%; overflow: hidden; }
 .app-root .app-shell, .app-root .workspace, .app-root .codex-split > .splitpanes__pane, .app-root .pane { background: var(--app-bg); }
 .app-root .topbar, .app-root .pane-header, .app-root .composer { color: var(--app-text); background: var(--app-surface); border-color: var(--app-border); }

@@ -14,7 +14,7 @@ const scheduleRender = (): void => {
 
 watch(() => [props.source, props.streaming] as const, scheduleRender, { immediate: true });
 
-const handleClick = (event: MouseEvent): void => {
+const handleClick = async (event: MouseEvent): Promise<void> => {
   const target = event.target instanceof Element ? event.target.closest("a") : null;
   if (!target) return;
   event.preventDefault();
@@ -27,7 +27,11 @@ const handleClick = (event: MouseEvent): void => {
       dialog.warning({ title: "无法打开链接", content: "Codex Pane 只允许通过系统浏览器打开 HTTP 或 HTTPS 链接。", positiveText: "知道了" });
       return;
     }
-    void window.codexPane.openExternal(url.toString());
+    try {
+      await window.codexPane.openExternal(url.toString());
+    } catch (error) {
+      dialog.error({ title: "无法打开链接", content: error instanceof Error ? error.message : String(error), positiveText: "知道了" });
+    }
   } catch {
     dialog.warning({ title: "无法打开链接", content: "这个链接格式无效。", positiveText: "知道了" });
   }

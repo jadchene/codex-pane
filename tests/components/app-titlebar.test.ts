@@ -71,6 +71,11 @@ describe("App titlebar", () => {
     await wrapper.vm.$nextTick();
     expect(wrapper.find(".custom-titlebar").exists()).toBe(false);
     expect(wrapper.get(".app-root").classes()).toContain("app-root-fullscreen");
+    wrapper.get('button[aria-label="退出全屏"]');
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    expect(window.codexPane.setFullScreen).toHaveBeenLastCalledWith(false);
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "F11" }));
+    expect(window.codexPane.setFullScreen).toHaveBeenLastCalledWith(false);
   });
 
   it("removes empty panes first and asks before removing a pane with a session", async () => {

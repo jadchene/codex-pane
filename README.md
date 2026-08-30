@@ -34,6 +34,10 @@ Switch modes at any time in Settings.
 - Use `/` for commands, `@` for Skills, and `$` for workspace files.
 - Attach local files and images, or paste images directly.
 - Switch models, reasoning effort, and permission modes from the composer.
+- Copy redacted connection and protocol diagnostics from Settings when troubleshooting.
+- Use `F11` to enter or leave full screen; `Esc` and the floating top-right action also exit full screen.
+
+When several attachments are added, unreadable files are reported individually while successful imports are kept. MCP forms and choice answers require an explicit submit and are never sent merely by selecting an option.
 
 Commands: `/agents`, `/cd`, `/compact`, `/fast`, `/goal`, `/mcp`, `/new`, `/permissions`, `/plan`, `/ps`, `/rename`, `/resume`, `/review`, `/skills`, `/status`, `/stop`.
 

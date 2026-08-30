@@ -10,6 +10,8 @@ const MAX_MANAGED_FILE_BYTES = 1024 * 1024 * 1024;
 
 export class FileStore {
   readonly #directory: string;
+  #maintenancePromise: Promise<void> | null = null;
+  #maintenanceRequested = false;
 
   constructor(directory: string) {
     this.#directory = resolve(directory);
@@ -17,6 +19,26 @@ export class FileStore {
 
   async initialize(): Promise<void> {
     await mkdir(this.#directory, { recursive: true });
+    await this.#scheduleMaintenance();
+  }
+
+  #scheduleMaintenance(): Promise<void> {
+    this.#maintenanceRequested = true;
+    if (this.#maintenancePromise) return this.#maintenancePromise;
+    const operation = (async () => {
+      while (this.#maintenanceRequested) {
+        this.#maintenanceRequested = false;
+        await this.#enforceRetentionAndQuota();
+      }
+    })();
+    const tracked = operation.finally(() => {
+      if (this.#maintenancePromise === tracked) this.#maintenancePromise = null;
+    });
+    this.#maintenancePromise = tracked;
+    return tracked;
+  }
+
+  async #enforceRetentionAndQuota(): Promise<void> {
     const entries = await readdir(this.#directory, { withFileTypes: true });
     const files: Array<{ path: string; mtimeMs: number; size: number }> = [];
     for (const entry of entries) {
@@ -24,13 +46,17 @@ export class FileStore {
       const path = resolve(this.#directory, entry.name);
       if (dirname(path) !== this.#directory) continue;
       const metadata = await stat(path);
-      if (metadata.mtimeMs < Date.now() - FILE_RETENTION_MS) await unlink(path);
+      if (metadata.mtimeMs < Date.now() - FILE_RETENTION_MS) await unlink(path).catch((error) => {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      });
       else files.push({ path, mtimeMs: metadata.mtimeMs, size: metadata.size });
     }
     let totalBytes = files.reduce((sum, file) => sum + file.size, 0);
     for (const file of files.sort((left, right) => left.mtimeMs - right.mtimeMs)) {
       if (totalBytes <= MAX_MANAGED_FILE_BYTES) break;
-      await unlink(file.path);
+      await unlink(file.path).catch((error) => {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      });
       totalBytes -= file.size;
     }
   }
@@ -51,6 +77,7 @@ export class FileStore {
       const now = new Date();
       await utimes(destination, now, now);
     }
+    await this.#scheduleMaintenance();
     return { id, name, path: destination, managed: true };
   }
 

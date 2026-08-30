@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import { NAutoComplete, NButton, NCard, NColorPicker, NDescriptions, NDescriptionsItem, NDivider, NForm, NFormItem, NInput, NInputNumber, NModal, NRadioButton, NRadioGroup, NSpace, NSwitch, NTag, NText } from "naive-ui";
+import { NAlert, NAutoComplete, NButton, NCard, NColorPicker, NDescriptions, NDescriptionsItem, NDivider, NForm, NFormItem, NInput, NInputNumber, NModal, NRadioButton, NRadioGroup, NSpace, NSwitch, NTag, NText } from "naive-ui";
 import { useWorkspaceStore } from "../stores/workspace";
 import type { AppearanceSettings, ThemeMode, WorkspaceMode } from "../types";
 
@@ -25,6 +25,8 @@ const unwrapPowerShellCommands = computed({ get: () => store.state.appearance.un
 const mcpGatewayAdaptation = computed({ get: () => store.state.appearance.mcpGatewayAdaptation, set: (value: boolean) => updateAppearance({ mcpGatewayAdaptation: value }) });
 const systemFonts = ref<string[]>([]);
 const fontListState = ref<"idle" | "loading" | "ready" | "unavailable" | "denied">("idle");
+const diagnosticsState = ref<"idle" | "copying" | "copied" | "empty" | "error">("idle");
+const diagnosticsError = ref("");
 const fontOptions = computed(() => systemFonts.value.map((family) => ({ label: family, value: family })));
 const display = (value: string | null | undefined): string => value || "—";
 const noSpellcheckInputProps = { spellcheck: false, autocorrect: "off", autocapitalize: "off" } as const;
@@ -45,6 +47,23 @@ const loadSystemFonts = async (): Promise<void> => {
     } catch {
       fontListState.value = queryLocalFonts ? "denied" : "unavailable";
     }
+  }
+};
+const copyDiagnostics = async (): Promise<void> => {
+  if (diagnosticsState.value === "copying") return;
+  diagnosticsState.value = "copying";
+  diagnosticsError.value = "";
+  try {
+    const lines = await window.codexPane.readDiagnostics();
+    if (!lines.length) {
+      diagnosticsState.value = "empty";
+      return;
+    }
+    await window.codexPane.copyText(lines.join("\n"));
+    diagnosticsState.value = "copied";
+  } catch (error) {
+    diagnosticsState.value = "error";
+    diagnosticsError.value = error instanceof Error ? error.message : String(error);
   }
 };
 watch(() => props.show, (show) => { if (show) void loadSystemFonts(); }, { immediate: true });
@@ -116,7 +135,7 @@ watch(() => props.show, (show) => { if (show) void loadSystemFonts(); }, { immed
             <NSwitch v-model:value="unwrapPowerShellCommands" />
           </NFormItem>
           <NFormItem label="MCP Gateway 适配">
-            <NSwitch v-model:value="mcpGatewayAdaptation" />
+            <div class="switch-with-help"><NSwitch v-model:value="mcpGatewayAdaptation" /><NText depth="3">把 gateway_call_tool / call_tool 的目标服务与真实工具名称直接展示在工具卡片中；只影响显示，不修改协议请求。</NText></div>
           </NFormItem>
         </NForm>
       </section>
@@ -139,6 +158,21 @@ watch(() => props.show, (show) => { if (show) void loadSystemFonts(); }, { immed
           <NTag v-for="profile in store.state.permissionProfiles" :key="profile.id" size="small" :type="profile.allowed ? 'success' : 'default'">{{ profile.id }} · {{ profile.allowed ? "可用" : "不可用" }}</NTag>
         </NSpace>
       </section>
+      <NDivider />
+      <section class="settings-section">
+        <div class="settings-section-heading"><NText strong>诊断与兼容性</NText><NText depth="3">最近 200 条</NText></div>
+        <NDescriptions label-placement="left" bordered :column="2" class="diagnostics-summary">
+          <NDescriptionsItem label="连接状态">{{ store.state.connection.message }}</NDescriptionsItem>
+          <NDescriptionsItem label="Codex 版本">{{ display(store.state.connection.codexVersion) }}</NDescriptionsItem>
+        </NDescriptions>
+        <NSpace align="center" class="diagnostics-actions">
+          <NButton secondary :loading="diagnosticsState === 'copying'" @click="copyDiagnostics">复制脱敏诊断</NButton>
+          <NText depth="3">用于报告连接和协议问题；凭据、令牌与用户目录会在写入日志前隐藏。</NText>
+        </NSpace>
+        <NAlert v-if="diagnosticsState === 'copied'" type="success">诊断信息已复制到剪贴板。</NAlert>
+        <NAlert v-else-if="diagnosticsState === 'empty'" type="info">当前还没有诊断记录。</NAlert>
+        <NAlert v-else-if="diagnosticsState === 'error'" type="error">无法复制诊断信息：{{ diagnosticsError }}</NAlert>
+      </section>
     </NSpace>
     <template #footer><NSpace justify="end"><NButton type="primary" @click="emit('update:show', false)">完成</NButton></NSpace></template>
   </NModal>
@@ -152,10 +186,12 @@ watch(() => props.show, (show) => { if (show) void loadSystemFonts(); }, { immed
 .settings-form :deep(.n-form-item-label), :deep(.n-descriptions-table-header) { font-weight: 600; }
 .directory-value { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .font-field { display: grid; width: 100%; gap: 5px; }
+.switch-with-help { display: grid; gap: 5px; }
 .font-field .n-text { font-size: 12px; }
 .runtime-form :deep(.n-card) { width: 100%; }
 .settings-form :deep(.n-input-number) { width: 100%; }
 .permission-profiles { margin-top: 12px; }
+.diagnostics-summary, .diagnostics-actions { margin-top: 12px; }
 @media (max-width: 620px) {
   .settings-form :deep(.n-form-item) { grid-template-columns: 1fr !important; }
   .settings-form :deep(.n-form-item-label) { padding-bottom: 5px; text-align: left; }

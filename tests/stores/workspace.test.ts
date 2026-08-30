@@ -236,7 +236,8 @@ describe("workspace state machine", () => {
     const pane = store.state.panes[0]!;
     vi.mocked(window.codexPane.chooseAttachments).mockResolvedValueOnce({
       images: [{ id: "image-1", name: "one.png", url: "codex-media://media/image-1", size: 1, kind: "local", sourcePath: "E:\\Data\\image-1.png" }],
-      files: [{ id: "11111111-1111-4111-8111-111111111111", name: "notes.txt", path: "E:\\Data\\11111111-1111-4111-8111-111111111111.txt", managed: true }]
+      files: [{ id: "11111111-1111-4111-8111-111111111111", name: "notes.txt", path: "E:\\Data\\11111111-1111-4111-8111-111111111111.txt", managed: true }],
+      errors: []
     });
     await store.chooseAttachments(pane);
     expect(window.codexPane.chooseAttachments).toHaveBeenCalledWith(20);
@@ -246,6 +247,38 @@ describe("workspace state machine", () => {
     await store.chooseAttachments(pane);
     expect(window.codexPane.chooseAttachments).toHaveBeenCalledTimes(1);
     expect(pane.error).toContain("最多添加 20 个附件");
+  });
+
+  it("keeps successful attachments when another selected file fails", async () => {
+    installApi(Promise.resolve({ connection: connection("ready"), workspace: null }));
+    const store = useWorkspaceStore();
+    await store.initialize();
+    const pane = store.state.panes[0]!;
+    vi.mocked(window.codexPane.chooseAttachments).mockResolvedValueOnce({
+      images: [],
+      files: [{ id: "22222222-2222-4222-8222-222222222222", name: "ok.txt", path: "E:\\Data\\ok.txt", managed: true }],
+      errors: ["bad.png：这个文件不是可识别的图片。"]
+    });
+    await store.chooseAttachments(pane);
+    expect(pane.references.map((reference) => reference.name)).toEqual(["ok.txt"]);
+    expect(pane.error).toContain("部分附件未能添加");
+    expect(pane.error).toContain("bad.png");
+  });
+
+  it("surfaces reconnect failures and flushes pending workspace state on demand", async () => {
+    installApi(Promise.resolve({ connection: connection("ready"), workspace: null }));
+    const store = useWorkspaceStore();
+    await store.initialize();
+    vi.mocked(window.codexPane.reconnect).mockRejectedValueOnce(new Error("codex missing"));
+    await expect(store.reconnect()).rejects.toThrow("codex missing");
+    expect(store.state.connection).toMatchObject({ phase: "error", message: "重新连接失败：codex missing" });
+    expect(store.state.notices.at(-1)).toContain("重新连接失败");
+
+    vi.mocked(window.codexPane.saveWorkspace).mockClear();
+    store.state.panes[0]!.draft = "关闭前必须保存";
+    store.scheduleSave();
+    await store.flushSave();
+    expect(window.codexPane.saveWorkspace).toHaveBeenCalledWith(expect.objectContaining({ panes: expect.arrayContaining([expect.objectContaining({ draft: "关闭前必须保存" })]) }));
   });
 
   it("sends selected Skills and file references as structured app-server input", async () => {

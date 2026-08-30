@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import { mount } from "@vue/test-utils";
+import { NInputNumber } from "naive-ui";
 import { describe, expect, it, vi } from "vitest";
 import ApprovalCenter from "../../src/components/ApprovalCenter.vue";
 import type { PendingServerRequest } from "../../src/types";
@@ -74,7 +75,7 @@ describe("ApprovalCenter request lifecycle UI", () => {
       ]
     });
     const wrapper = mountCenter([legacy]);
-    expect(wrapper.text()).toContain('"C:\\Program Files\\PowerShell\\7\\pwsh.exe" -Command "Get-ChildItem -Force"');
+    expect(wrapper.text()).toContain("'C:\\Program Files\\PowerShell\\7\\pwsh.exe' -Command 'Get-ChildItem -Force'");
     expect(wrapper.text()).toContain("允许并记住命令规则");
     expect(wrapper.text()).toContain("允许并应用网络规则");
     expect(wrapper.get(".approval-actions").text()).toContain("允许并记住命令规则");
@@ -101,13 +102,15 @@ describe("ApprovalCenter request lifecycle UI", () => {
     expect(wrapper.emitted("resolve")?.at(-1)).toEqual([userInput, { answers: { purpose: { answers: ["用于验收"] } } }]);
   });
 
-  it("submits provided user-input choices immediately", async () => {
+  it("requires an explicit confirmation after selecting a user-input choice", async () => {
     const userInput = request("question-choice", "item/tool/requestUserInput", "pane-1", {
       questions: [{ id: "mode", header: "模式", question: "请选择模式", options: [{ label: "安全", description: "只读执行" }, { label: "完整", description: "允许修改" }] }]
     });
     const wrapper = mountCenter([userInput]);
-    expect(wrapper.text()).not.toContain("提交回答");
+    expect(wrapper.text()).toContain("提交回答");
     await clickButton(wrapper, "安全");
+    expect(wrapper.emitted("resolve")).toBeUndefined();
+    await clickButton(wrapper, "提交回答");
     expect(wrapper.emitted("resolve")).toEqual([[userInput, { answers: { mode: { answers: ["安全"] } } }]]);
   });
 
@@ -135,7 +138,7 @@ describe("ApprovalCenter request lifecycle UI", () => {
     ]);
   });
 
-  it("submits a single MCP enum option without extra confirmation buttons", async () => {
+  it("requires explicit confirmation for a single MCP enum option", async () => {
     const elicitation = request(33, "mcpServer/elicitation/request", "pane-1", {
       mode: "form",
       requestedSchema: {
@@ -145,10 +148,28 @@ describe("ApprovalCenter request lifecycle UI", () => {
       }
     });
     const wrapper = mountCenter([elicitation]);
-    expect(wrapper.text()).not.toContain("提交");
-    expect(wrapper.text()).not.toContain("拒绝");
+    expect(wrapper.text()).toContain("提交");
+    expect(wrapper.text()).toContain("拒绝");
     await clickButton(wrapper, "测试");
+    expect(wrapper.emitted("resolve")).toBeUndefined();
+    await clickButton(wrapper, "提交");
     expect(wrapper.emitted("resolve")).toEqual([[elicitation, { action: "accept", content: { environment: "测试" }, _meta: null }]]);
+  });
+
+  it("validates MCP form constraints before sending content", async () => {
+    const elicitation = request(34, "mcpServer/elicitation/request", "pane-1", {
+      mode: "form",
+      requestedSchema: {
+        type: "object",
+        properties: { port: { type: "integer", title: "端口", minimum: 1, maximum: 65535 } },
+        required: ["port"]
+      }
+    });
+    const wrapper = mountCenter([elicitation]);
+    wrapper.getComponent(NInputNumber).vm.$emit("update:value", 70000);
+    await clickButton(wrapper, "提交");
+    expect(wrapper.text()).toContain("端口不能大于 65535");
+    expect(wrapper.emitted("resolve")).toBeUndefined();
   });
 
   it("opens an MCP URL only through the preload contract", async () => {

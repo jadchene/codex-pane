@@ -96,6 +96,8 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     initialized: false
   });
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
+  let saveInFlight: Promise<void> = Promise.resolve();
+  let reconnectInFlight: Promise<void> | null = null;
   const paneReadiness = new Map<string, Promise<void>>();
   const threadCreations = new Map<string, Promise<string>>();
   const sendsInFlight = new Set<string>();
@@ -176,6 +178,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
       else handleProtocolEvent(event);
     });
     window.addEventListener("beforeunload", () => {
+      void flushSave();
       removeStateListener();
       removeProtocolListener();
     }, { once: true });
@@ -1104,12 +1107,13 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     const data = Array.isArray(response.data) ? response.data : [];
     const listedThreads = data.map((rawThread): ThreadSummary => {
       const thread = getRecord(rawThread);
+      const rawUpdatedAt = typeof thread.updatedAt === "number" && Number.isFinite(thread.updatedAt) ? thread.updatedAt : 0;
       return {
         id: getString(thread.id) ?? "",
         name: getString(thread.name),
         preview: getString(thread.preview) ?? "无预览内容",
         cwd: getString(thread.cwd) ?? "",
-        updatedAt: typeof thread.updatedAt === "number" ? thread.updatedAt : 0,
+        updatedAt: rawUpdatedAt > 100_000_000_000 ? rawUpdatedAt / 1000 : rawUpdatedAt,
         status: getString(getRecord(thread.status).type) ?? getString(thread.status) ?? "notLoaded"
       };
     }).filter((thread) => thread.id);
@@ -1329,6 +1333,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     pane.references = [];
     try {
       const threadId = await ensureThread(pane);
+      pane.status = "running";
       const input: Array<
         { type: "text"; text: string; text_elements: unknown[] }
         | { type: "managedImage"; id: string; detail: "high" }
@@ -1384,18 +1389,14 @@ export const useWorkspaceStore = defineStore("workspace", () => {
       const [commandName = "", ...argumentParts] = command.trim().split(/\s+/);
       command = ({ permission: "permissions", cwd: "cd", processes: "ps", "kill-processes": "stop" } as Record<string, string>)[commandName] ?? commandName;
       const argument = argumentParts.join(" ").trim();
-      const appendLocal = (type: string, data: Record<string, unknown>): UiItem => appendPaneItem(pane, createUiItem({
+      const appendLocal = (type: string, data: Record<string, unknown>): UiItem => appendPaneItem(pane, {
         id: crypto.randomUUID(), turnId: "local", type, data, streamText: "", status: "completed"
-      }));
+      });
       if (command === "status") {
         const lastUsage = getRecord(pane.tokenUsage?.last);
         const usedTokens = typeof lastUsage.totalTokens === "number" ? Math.max(0, Math.round(lastUsage.totalTokens)) : 0;
         const totalTokens = typeof pane.tokenUsage?.modelContextWindow === "number" ? Math.max(0, Math.round(pane.tokenUsage.modelContextWindow)) : 0;
-        pane.items.push({
-          id: crypto.randomUUID(),
-          turnId: "local",
-          type: "status",
-          data: {
+        appendLocal("status", {
             connection: state.value.connection.message,
             threadId: pane.threadId ?? "未创建",
             account: state.value.accountLabel === "—" ? "未登录" : state.value.accountLabel,
@@ -1406,14 +1407,41 @@ export const useWorkspaceStore = defineStore("workspace", () => {
             backgroundProcessCount: pane.backgroundTerminals?.length ?? 0,
             approvalState: pane.strictReviewRequired ? "需要严格复核" : pane.activeFlags?.includes("waitingOnApproval") ? "等待确认" : "无需确认",
             quotas: state.value.rateLimitLabels.length ? state.value.rateLimitLabels : ["无额度数据"]
-          },
-          streamText: "",
-          status: "completed"
         });
         return;
       }
       if (command === "cd") {
         await chooseDirectory(pane);
+        return;
+      }
+      if (command === "mcp") {
+        const result = await refreshMcpServers(pane.threadId);
+        appendLocal("mcpStatus", result);
+        return;
+      }
+      if (command === "skills") {
+        const result = getRecord(await window.codexPane.request({ method: "skills/list", params: { cwds: pane.cwd ? [pane.cwd] : [], forceReload: false } }));
+        updatePaneSkills(pane, result);
+        appendLocal("skills", result);
+        return;
+      }
+      if (command === "permissions") {
+        const findProfile = (id: string) => state.value.permissionProfiles.find((profile) => profile.allowed && profile.id.replace(/^:/, "") === id.replace(/^:/, ""));
+        const readOnly = findProfile(":read-only");
+        const workspace = findProfile(":workspace");
+        const fullAccess = findProfile(":danger-full-access");
+        const modes = [
+          readOnly && { id: "readOnly", label: "只读", description: "可读取当前工作区；编辑文件或访问网络需要确认。", profileId: readOnly.id, approvalPolicy: "on-request", approvalsReviewer: "user" },
+          workspace && { id: "ask", label: "请求审批", description: "可读写当前工作区并运行命令；联网或修改其他位置需要确认。", profileId: workspace.id, approvalPolicy: "on-request", approvalsReviewer: "user" },
+          workspace && { id: "auto", label: "自动审批", description: "仅对检测为可能不安全的操作询问。", profileId: workspace.id, approvalPolicy: "on-request", approvalsReviewer: "auto_review" },
+          fullAccess && { id: "full", label: "完全访问", description: "可修改工作区外文件并访问网络，不再询问。", profileId: fullAccess.id, approvalPolicy: "never", approvalsReviewer: "user" }
+        ].filter(Boolean);
+        appendLocal("permissions", {
+          modes,
+          currentProfile: pane.activePermissionProfile,
+          currentApprovalPolicy: pane.approvalPolicy ?? state.value.effectiveConfig?.approvalPolicy,
+          currentApprovalsReviewer: pane.approvalsReviewer ?? state.value.effectiveConfig?.approvalReviewer
+        });
         return;
       }
       const threadId = await ensureThread(pane);
@@ -1496,47 +1524,17 @@ export const useWorkspaceStore = defineStore("workspace", () => {
             sourceKinds: ["subAgent", "subAgentReview", "subAgentCompact", "subAgentThreadSpawn", "subAgentOther"]
           }
         }));
-        pane.items.push({ id: crypto.randomUUID(), turnId: "local", type: "agents", data: { agents: Array.isArray(result.data) ? result.data : [] }, streamText: "", status: "completed" });
+        appendLocal("agents", { agents: Array.isArray(result.data) ? result.data : [] });
         return;
       }
       if (command === "ps") {
         const processes = await refreshBackgroundTerminals(pane);
-        pane.items.push({ id: crypto.randomUUID(), turnId: "local", type: "backgroundProcesses", data: { processes }, streamText: "", status: "completed" });
+        appendLocal("backgroundProcesses", { processes });
         return;
       }
       if (command === "stop") {
         const result = await stopAllBackgroundProcesses(pane);
-        pane.items.push({ id: crypto.randomUUID(), turnId: "local", type: "backgroundProcesses", data: { processes: [], result }, streamText: "", status: "completed" });
-        return;
-      }
-      if (command === "permissions") {
-        const findProfile = (id: string) => state.value.permissionProfiles.find((profile) => profile.allowed && profile.id.replace(/^:/, "") === id.replace(/^:/, ""));
-        const readOnly = findProfile(":read-only");
-        const workspace = findProfile(":workspace");
-        const fullAccess = findProfile(":danger-full-access");
-        const modes = [
-          readOnly && { id: "readOnly", label: "只读", description: "可读取当前工作区；编辑文件或访问网络需要确认。", profileId: readOnly.id, approvalPolicy: "on-request", approvalsReviewer: "user" },
-          workspace && { id: "ask", label: "请求审批", description: "可读写当前工作区并运行命令；联网或修改其他位置需要确认。", profileId: workspace.id, approvalPolicy: "on-request", approvalsReviewer: "user" },
-          workspace && { id: "auto", label: "自动审批", description: "仅对检测为可能不安全的操作询问。", profileId: workspace.id, approvalPolicy: "on-request", approvalsReviewer: "auto_review" },
-          fullAccess && { id: "full", label: "完全访问", description: "可修改工作区外文件并访问网络，不再询问。", profileId: fullAccess.id, approvalPolicy: "never", approvalsReviewer: "user" }
-        ].filter(Boolean);
-        appendLocal("permissions", {
-          modes,
-          currentProfile: pane.activePermissionProfile,
-          currentApprovalPolicy: pane.approvalPolicy ?? state.value.effectiveConfig?.approvalPolicy,
-          currentApprovalsReviewer: pane.approvalsReviewer ?? state.value.effectiveConfig?.approvalReviewer
-        });
-        return;
-      }
-      if (command === "mcp") {
-        const result = await refreshMcpServers(threadId);
-        pane.items.push({ id: crypto.randomUUID(), turnId: "local", type: "mcpStatus", data: result, streamText: "", status: "completed" });
-        return;
-      }
-      if (command === "skills") {
-        const result = getRecord(await window.codexPane.request({ method: "skills/list", params: { cwds: pane.cwd ? [pane.cwd] : [], forceReload: false } }));
-        updatePaneSkills(pane, result);
-        pane.items.push({ id: crypto.randomUUID(), turnId: "local", type: "skills", data: result, streamText: "", status: "completed" });
+        appendLocal("backgroundProcesses", { processes: [], result });
         return;
       }
       throw new Error(`不支持的命令：/${command}`);
@@ -1805,7 +1803,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     scheduleSave();
   };
 
-  const addAttachmentBatch = (pane: PaneState, batch: { images: PaneState["attachments"]; files: PaneState["references"] }): void => {
+  const addAttachmentBatch = (pane: PaneState, batch: { images: PaneState["attachments"]; files: PaneState["references"]; errors?: string[] }): void => {
     const imageIds = new Set(pane.attachments.map((attachment) => attachment.id));
     const referencePaths = new Set(pane.references.map((reference) => reference.path.toLocaleLowerCase()));
     pane.attachments.push(...batch.images.filter((attachment) => {
@@ -1819,7 +1817,9 @@ export const useWorkspaceStore = defineStore("workspace", () => {
       referencePaths.add(path);
       return true;
     }));
-    pane.error = null;
+    pane.error = batch.errors?.length
+      ? `部分附件未能添加（${batch.errors.length} 个）：${batch.errors.slice(0, 3).join("；")}${batch.errors.length > 3 ? "；其余错误已省略" : ""}`
+      : null;
     scheduleSave();
   };
 
@@ -1831,7 +1831,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     }
     try {
       const batch = await window.codexPane.chooseAttachments(available);
-      if (batch.images.length || batch.files.length) addAttachmentBatch(pane, batch);
+      if (batch.images.length || batch.files.length || batch.errors.length) addAttachmentBatch(pane, batch);
     } catch (error) {
       pane.error = `无法添加附件：${error instanceof Error ? error.message : String(error)}`;
     }
@@ -1845,7 +1845,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     }
     try {
       const batch = await window.codexPane.pasteAttachments(paths, available);
-      if (batch.images.length || batch.files.length) addAttachmentBatch(pane, batch);
+      if (batch.images.length || batch.files.length || batch.errors.length) addAttachmentBatch(pane, batch);
     } catch (error) {
       pane.error = `无法粘贴附件：${error instanceof Error ? error.message : String(error)}`;
     }
@@ -1927,22 +1927,30 @@ export const useWorkspaceStore = defineStore("workspace", () => {
       addNotice("仍有任务或确认请求未完成。请先中断或处理完成后再重新连接。" );
       return;
     }
-    await window.codexPane.reconnect();
+    if (reconnectInFlight) return reconnectInFlight;
+    const operation = window.codexPane.reconnect().catch((error) => {
+      const message = `重新连接失败：${error instanceof Error ? error.message : String(error)}`;
+      state.value.connection = { ...state.value.connection, phase: "error", message };
+      addNotice(message);
+      throw error;
+    }).finally(() => {
+      if (reconnectInFlight === operation) reconnectInFlight = null;
+    });
+    reconnectInFlight = operation;
+    return operation;
   };
 
-  const scheduleSave = (): void => {
-    if (!state.value.initialized) {
-      return;
-    }
+  const flushSave = (): Promise<void> => {
+    if (!state.value.initialized || typeof globalThis.window === "undefined") return saveInFlight;
     if (saveTimer) {
       clearTimeout(saveTimer);
+      saveTimer = null;
     }
-    saveTimer = setTimeout(() => {
-      // Main process replaces this snapshot with trusted BrowserWindow bounds.
-      const windowState = { width: Math.max(800, window.innerWidth), height: Math.max(600, window.innerHeight), maximized: false };
-      const persistedPanes = state.value.panes.filter((pane) => !pane.id.startsWith(SIDEBAR_PANE_PREFIX)).slice(0, 6);
-      const persistedFocusedPaneId = persistedPanes.some((pane) => pane.id === state.value.focusedPaneId) ? state.value.focusedPaneId : persistedPanes[0]?.id ?? null;
-      void window.codexPane.saveWorkspace({
+    // Main process replaces this snapshot with trusted BrowserWindow bounds.
+    const windowState = { width: Math.max(800, window.innerWidth), height: Math.max(600, window.innerHeight), maximized: false };
+    const persistedPanes = state.value.panes.filter((pane) => !pane.id.startsWith(SIDEBAR_PANE_PREFIX)).slice(0, 6);
+    const persistedFocusedPaneId = persistedPanes.some((pane) => pane.id === state.value.focusedPaneId) ? state.value.focusedPaneId : persistedPanes[0]?.id ?? null;
+    const snapshot = {
         version: 1,
         workspaceMode: state.value.workspaceMode,
         layout: state.value.layout,
@@ -1968,10 +1976,22 @@ export const useWorkspaceStore = defineStore("workspace", () => {
           followTail
         })),
         window: windowState
-      }).catch((error) => {
+      } as const;
+    const operation = saveInFlight.then(() => window.codexPane.saveWorkspace(snapshot)).catch((error) => {
         const pane = state.value.panes[0];
         if (pane) pane.error = `无法保存工作台：${error instanceof Error ? error.message : String(error)}`;
+        throw error;
       });
+    saveInFlight = operation.catch(() => undefined);
+    return operation;
+  };
+
+  const scheduleSave = (): void => {
+    if (!state.value.initialized) return;
+    if (saveTimer) clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => {
+      saveTimer = null;
+      void flushSave().catch(() => undefined);
     }, 400);
   };
 
@@ -2017,6 +2037,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     stopBackgroundProcess,
     stopAllBackgroundProcesses,
     refreshAccountUsage,
+    flushSave,
     scheduleSave
   };
 });
