@@ -26,6 +26,7 @@ type Challenge = { connectionId: string; nonce: string; expiresAt: number };
 type Connection = {
   socket: HeartbeatSocket;
   challenge: Challenge;
+  attachTimer?: NodeJS.Timeout;
   role: "pending" | "desktop" | "mobile";
   channelId?: string;
   peerId?: string;
@@ -84,6 +85,12 @@ const messageAllowed = (connection: Connection): boolean => {
   return connection.rate.count <= 240;
 };
 
+const clearAttachTimer = (connection: Connection): void => {
+  if (!connection.attachTimer) return;
+  clearTimeout(connection.attachTimer);
+  connection.attachTimer = undefined;
+};
+
 const disconnectMobile = (channel: Channel, mobile: MobileConnection, code = 1008, reason = "Access removed"): void => {
   channel.mobiles.delete(mobile.peerId);
   mobile.socket.close(code, reason);
@@ -103,6 +110,7 @@ const attachDesktop = (connection: Connection, raw: unknown): void => {
     for (const mobile of existing.mobiles.values()) mobile.socket.close(1012, "Desktop reconnected");
   }
   const desktop = Object.assign(connection, { role: "desktop" as const, channelId: body.channelId, peerId: randomUUID() });
+  clearAttachTimer(connection);
   channels.set(body.channelId, { desktop, revision: -1, devices: new Map(), pairing: null, mobiles: new Map() });
   sendJson(connection.socket, { type: "relay.attached", role: "desktop", peerId: desktop.peerId });
 };
@@ -134,6 +142,7 @@ const attachMobile = (connection: Connection, raw: unknown): void => {
     mode: body.mode,
     deviceId: body.mode === "device" ? body.deviceId : undefined
   });
+  clearAttachTimer(connection);
   channel.mobiles.set(mobile.peerId, mobile);
   sendJson(connection.socket, { type: "relay.attached", role: "mobile", peerId: mobile.peerId, mode: mobile.mode });
   sendJson(channel.desktop.socket, { type: "channel.peer-online", peerId: mobile.peerId, mode: mobile.mode, ...(mobile.deviceId ? { deviceId: mobile.deviceId } : {}) });
@@ -180,6 +189,10 @@ app.get("/ws", { websocket: true }, (socket, request) => {
   const challenge = { connectionId: randomUUID(), nonce: randomBytes(32).toString("base64url"), expiresAt: Date.now() + RELAY_CHALLENGE_TTL_MS };
   const heartbeatSocket = socket as HeartbeatSocket;
   const connection: Connection = { socket: heartbeatSocket, challenge, role: "pending", rate: { startedAt: Date.now(), count: 0 } };
+  connection.attachTimer = setTimeout(() => {
+    if (connection.role === "pending") socket.close(1008, "Challenge expired");
+  }, RELAY_CHALLENGE_TTL_MS);
+  connection.attachTimer.unref();
   connections.add(connection);
   heartbeatSocket.isAlive = true;
   heartbeatSocket.on("pong", () => { heartbeatSocket.isAlive = true; });
@@ -200,6 +213,7 @@ app.get("/ws", { websocket: true }, (socket, request) => {
     }
   });
   socket.on("close", () => {
+    clearAttachTimer(connection);
     connections.delete(connection);
     if (!connection.channelId) return;
     const channel = channels.get(connection.channelId);

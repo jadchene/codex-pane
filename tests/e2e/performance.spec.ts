@@ -71,7 +71,7 @@ test("keeps the longest-session shape smooth across six panes", async () => {
   const userDataPath = resolve("test-results", `performance-user-data-${randomUUID()}`);
   await createWorkspace(userDataPath);
   const application = await electron.launch({
-    args: [resolve(".")],
+    args: ["--no-sandbox", "--disable-gpu", "--in-process-gpu", "--use-angle=swiftshader", "--use-gl=angle", resolve(".")],
     env: {
       ...Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => typeof entry[1] === "string")),
       CODEX_PANE_LOAD_DIST: "1",

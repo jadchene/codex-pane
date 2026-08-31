@@ -108,9 +108,10 @@ export const remoteSettingsSchema = z.object({
     if (!value) return true;
     try {
       const url = new URL(value);
-      return url.protocol === "https:" || (url.protocol === "http:" && ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname));
+      const secureProtocol = url.protocol === "https:" || (url.protocol === "http:" && ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname));
+      return secureProtocol && !url.username && !url.password && url.pathname === "/" && !url.search && !url.hash;
     } catch { return false; }
-  }, "请使用 HTTPS 中转服务地址；本机调试可使用 HTTP")
+  }, "请填写不含账号、路径或参数的 HTTPS 中转服务地址；本机调试可使用 HTTP")
 }).superRefine((value, context) => {
   if (value.enabled && !value.relayUrl) context.addIssue({ code: "custom", path: ["relayUrl"], message: "启用远程访问前请填写中转服务地址" });
 });

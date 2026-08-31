@@ -130,6 +130,7 @@ let ephemeral = null;
 let iframe = null;
 let uiReady = false;
 let messageQueue = Promise.resolve();
+let secureSendQueue = Promise.resolve();
 let reconnectAttempt = 0;
 let stopped = false;
 const queuedUiEvents = [];
@@ -139,7 +140,18 @@ const sendFrame = (value) => {
   socket.send(JSON.stringify(value));
 };
 const sendData = (value) => sendFrame({ type: "channel.data", payload: JSON.stringify(value) });
-const sendSecure = async (value) => sendData(await secure.encrypt(value));
+const sendSecure = (value) => {
+  const session = secure;
+  const connection = socket;
+  const operation = secureSendQueue.then(async () => {
+    if (!session || secure !== session || !connection || socket !== connection) throw new Error("与桌面端的安全连接尚未恢复。");
+    const envelope = await session.encrypt(value);
+    if (secure !== session || socket !== connection) throw new Error("与桌面端的安全连接已更新，请重试。");
+    sendData(envelope);
+  });
+  secureSendQueue = operation.catch(() => undefined);
+  return operation;
+};
 const parsePairing = () => {
   try {
     const encoded = new URLSearchParams(location.hash.slice(1)).get("pair");
@@ -176,11 +188,13 @@ const connect = () => {
     queuedUiEvents.length = 0;
     document.body.replaceChildren(bootstrapRoot);
   }
+  setActions();
   setError();
   setStatus("正在连接桌面端…");
   const protocol = location.protocol === "https:" ? "wss:" : "ws:";
   socket = new WebSocket(`${protocol}//${location.host}/ws`);
   messageQueue = Promise.resolve();
+  secureSendQueue = Promise.resolve();
   socket.onmessage = (event) => {
     messageQueue = messageQueue
       .then(() => handleRelayMessage(JSON.parse(String(event.data))))
@@ -189,7 +203,7 @@ const connect = () => {
   socket.onclose = (event) => {
     socket = null;
     secure = null;
-    if (stopped || pairing) return;
+    if (stopped) return;
     if (uiReady && iframe?.contentWindow) iframe.contentWindow.postMessage({ source: "codex-pane-bootstrap", type: "disconnected", message: "与桌面端的安全连接已断开" }, "*");
     if (event.code === 1008 && event.reason === "Access removed") {
       stopped = true;
@@ -347,7 +361,15 @@ const handleSecureMessage = async (message) => {
     else queuedUiEvents.push(message.event);
     return;
   }
-  if (message.type === "error") setError(message.message || "桌面端拒绝了本次操作。");
+  if (message.type === "error") {
+    const errorMessage = message.message || "桌面端拒绝了本次操作。";
+    if (uiReady && iframe?.contentWindow) {
+      iframe.contentWindow.postMessage({ source: "codex-pane-bootstrap", type: "disconnected", message: errorMessage }, "*");
+    } else {
+      setError(errorMessage);
+      setActions(button("重新连接", () => location.reload()));
+    }
+  }
 };
 
 const mountMobileDocument = (html) => {

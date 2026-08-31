@@ -26,6 +26,7 @@ import { RelayConnection, type RelayConnectionEvent } from "./relay-connection.j
 import { RemoteAuditLog } from "./remote-audit-log.js";
 import { RemoteProjector, sanitizeRemoteActivityText } from "./remote-projector.js";
 import { ServerRequestCoordinator } from "./server-request-coordinator.js";
+import { SerialTaskQueue } from "./serial-task-queue.js";
 import { ThreadSubscriptionRegistry } from "./thread-subscription-registry.js";
 
 const record = (value: unknown): Record<string, unknown> => value && typeof value === "object" ? value as Record<string, unknown> : {};
@@ -46,6 +47,7 @@ type PeerState = {
   peerId: string;
   mode: "device" | "pairing";
   deviceId?: string;
+  dataQueue: SerialTaskQueue;
   secure?: SecureSession;
   authenticated: boolean;
   registrationChallenge?: string;
@@ -274,7 +276,7 @@ export class RemoteBridge extends EventEmitter {
       return;
     }
     if (event.type === "peerOnline") {
-      this.#peers.set(event.peerId, { peerId: event.peerId, mode: event.mode, deviceId: event.deviceId, authenticated: false });
+      this.#peers.set(event.peerId, { peerId: event.peerId, mode: event.mode, deviceId: event.deviceId, dataQueue: new SerialTaskQueue(), authenticated: false });
       return;
     }
     if (event.type === "peerOffline") {
@@ -282,7 +284,14 @@ export class RemoteBridge extends EventEmitter {
       if (this.#pairing?.peerId === event.peerId && !this.#pairing.readyToConfirm) this.#updateStatus({ message: "手机连接已断开，请重新扫码" });
       return;
     }
-    if (event.type === "data") await this.#handlePeerData(event.peerId, event.payload);
+    if (event.type === "data") {
+      const peer = this.#peers.get(event.peerId);
+      if (!peer) return;
+      await peer.dataQueue.enqueue(async () => {
+        if (this.#peers.get(event.peerId) !== peer) return;
+        await this.#handlePeerData(event.peerId, event.payload);
+      });
+    }
   }
 
   async #handlePeerData(peerId: string, raw: string): Promise<void> {
@@ -345,6 +354,8 @@ export class RemoteBridge extends EventEmitter {
     if (peer.mode !== "device" || peer.deviceId !== hello.deviceId || !credentials || !device || Math.abs(Date.now() - hello.timestamp) > 30_000) throw new Error("设备未获准访问。");
     const proof = sessionHelloProof(credentials.channelId, hello.sessionId, hello.deviceId, hello.mobileEphemeralPublicKey, hello.timestamp);
     if (!verifyP256(device.signingPublicKey, proof, hello.signature)) throw new Error("设备身份验证失败。");
+    peer.authenticated = false;
+    peer.authenticationChallenge = undefined;
     const ephemeral = generateP256KeyPair();
     const context = `session\n${credentials.channelId}\n${hello.sessionId}\n${hello.deviceId}`;
     peer.secure = new SecureSession(hello.sessionId, deriveSessionKey(ephemeral.privateKey, hello.mobileEphemeralPublicKey, context));
@@ -376,10 +387,17 @@ export class RemoteBridge extends EventEmitter {
       if (!device || !peer.authenticationChallenge || !credentials) throw new Error("登录请求已经过期。");
       const counter = await this.#passkeys!.verifyAuthentication(peer.authenticationChallenge, payload.response as AuthenticationResponseJSON, device);
       peer.authenticationChallenge = undefined;
+      const authenticatedAt = Date.now();
+      const updatedCredentials = {
+        ...credentials,
+        devices: credentials.devices.map((candidate) => candidate.id === device.id ? {
+          ...candidate,
+          passkey: { ...candidate.passkey, counter, lastUsedAt: authenticatedAt }
+        } : candidate)
+      };
+      await this.#credentialStore.save(updatedCredentials);
+      this.#credentials = updatedCredentials;
       peer.authenticated = true;
-      device.passkey.counter = counter;
-      device.passkey.lastUsedAt = Date.now();
-      await this.#credentialStore.save(credentials);
       await this.#auditLog.write("passkey.authenticated", { deviceId: device.id, deviceName: device.name }).catch(() => undefined);
       this.#syncCredentialStatus();
       this.#sendSecure(peer, { type: "session.ready" });
