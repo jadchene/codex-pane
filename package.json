@@ -10,7 +10,8 @@
   "scripts": {
     "dev": "npm run build:electron && concurrently -k \"vite\" \"wait-on http://127.0.0.1:5173 && electron .\"",
     "build:electron": "tsc -p tsconfig.electron.json && esbuild electron/preload/index.ts --bundle --platform=node --format=cjs --external:electron --outfile=dist-electron/preload.cjs",
-    "build": "vue-tsc --noEmit && npm run build:electron && vite build",
+    "build:remote-mobile": "npm --prefix remote/mobile run build",
+    "build": "npm run build:remote-mobile && vue-tsc --noEmit && npm run build:electron && vite build",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
@@ -27,6 +28,7 @@
     "icon:generate": "electron scripts/render-icon.cjs"
   },
   "dependencies": {
+    "@simplewebauthn/server": "^13.3.3",
     "@vicons/ionicons5": "^0.13.0",
     "ajv": "^8.17.1",
     "dompurify": "^3.2.6",
@@ -34,6 +36,7 @@
     "marked": "^15.0.12",
     "naive-ui": "^2.42.0",
     "pinia": "^3.0.3",
+    "qrcode": "^1.5.4",
     "splitpanes": "^4.0.4",
     "vue": "^3.5.18",
     "zod": "^3.25.76"
@@ -41,6 +44,8 @@
   "devDependencies": {
     "@playwright/test": "^1.54.2",
     "@types/node": "^24.1.0",
+    "@types/qrcode": "^1.5.6",
+    "@types/ws": "^8.18.1",
     "@vitejs/plugin-vue": "^6.0.1",
     "@vue/test-utils": "^2.4.6",
     "concurrently": "^9.2.0",
@@ -51,7 +56,8 @@
     "vite": "^7.0.6",
     "vitest": "^3.2.4",
     "vue-tsc": "^3.0.4",
-    "wait-on": "^8.0.4"
+    "wait-on": "^8.0.4",
+    "ws": "^8.21.3"
   },
   "build": {
     "appId": "com.jadchene.codexpane",
@@ -73,6 +79,7 @@
       "dist-electron/**",
       "packages/protocol/schema/generated/**",
       "packages/protocol/protocol-manifest.json",
+      "remote/mobile/dist-bundle/mobile.html",
       "package.json"
     ],
     "win": {

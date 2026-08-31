@@ -24,9 +24,10 @@ const envWithoutCodex = (): Record<string, string> => {
   return env;
 };
 
+const electronFlags = ["--no-sandbox", "--disable-gpu", "--in-process-gpu", "--use-angle=swiftshader", "--use-gl=angle"];
 const launchApplication = (env: Record<string, string>) => process.env.CODEX_PANE_E2E_EXE
-  ? electron.launch({ executablePath: resolve(process.env.CODEX_PANE_E2E_EXE), args: ["--disable-gpu"], env })
-  : electron.launch({ args: ["--disable-gpu", resolve(".")], env });
+  ? electron.launch({ executablePath: resolve(process.env.CODEX_PANE_E2E_EXE), args: electronFlags, env })
+  : electron.launch({ args: [...electronFlags, resolve(".")], env });
 
 const selectLayout = async (window: Awaited<ReturnType<ElectronApplication["firstWindow"]>>, label: string): Promise<void> => {
   await window.getByRole("button", { name: "切换窗格布局" }).click();

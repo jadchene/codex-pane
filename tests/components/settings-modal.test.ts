@@ -73,7 +73,7 @@ describe("SettingsModal", () => {
     expect(wrapper.findAll(".settings-note")).toHaveLength(0);
     shellInput!.vm.$emit("update:value", "");
     expect(wrapper.emitted("update:commandShellPath")?.at(-1)).toEqual([""]);
-    wrapper.findAllComponents(NSwitch)[0]!.vm.$emit("update:value", false);
+    wrapper.findAllComponents(NSwitch).find((component) => component.element.closest(".n-form-item")?.textContent?.includes("简化 pwsh 命令"))!.vm.$emit("update:value", false);
     expect(store.state.appearance.unwrapPowerShellCommands).toBe(false);
     await wrapper.findAll("button").find((button) => button.text() === "完成")!.trigger("click");
     expect(wrapper.emitted("update:show")?.at(-1)).toEqual([false]);
@@ -129,5 +129,26 @@ describe("SettingsModal", () => {
     await vi.waitFor(() => expect(copyText).toHaveBeenCalledWith("line 1\nline 2"));
     expect(wrapper.text()).toContain("诊断信息已复制到剪贴板");
     expect(wrapper.text()).toContain("Codex 版本");
+  });
+
+  it("configures remote access and starts desktop-authorized pairing", async () => {
+    const pinia = createPinia();
+    const status = { enabled: false, phase: "disabled" as const, message: "远程访问已关闭", relayUrl: "", paired: false, pairing: null, passkeys: [] };
+    const updateRemoteSettings = vi.fn().mockResolvedValue({ ...status, enabled: true, phase: "connecting", relayUrl: "https://pane.example.com", message: "正在连接中转服务…" });
+    const beginRemotePairing = vi.fn().mockResolvedValue({ ...status, enabled: true, phase: "pairing", relayUrl: "https://pane.example.com", message: "请使用手机扫描配对二维码" });
+    Object.defineProperty(window, "codexPane", { configurable: true, value: {
+      getRemoteAccessStatus: vi.fn().mockResolvedValue(status), updateRemoteSettings, beginRemotePairing,
+      onRemoteAccessStatus: vi.fn().mockReturnValue(() => undefined), listSystemFonts: vi.fn().mockResolvedValue([])
+    } });
+    const wrapper = mount(SettingsModal, { props: { show: true }, global: { plugins: [pinia], stubs: { teleport: true } } });
+    await vi.waitFor(() => expect(wrapper.text()).toContain("远程访问已关闭"));
+    const switches = wrapper.findAllComponents(NSwitch);
+    switches.find((component) => component.element.closest(".n-form-item")?.textContent?.includes("启用远程访问"))!.vm.$emit("update:value", true);
+    const relayInput = wrapper.findAllComponents(NInput).find((input) => input.props("placeholder") === "https://pane.example.com")!;
+    relayInput.vm.$emit("update:value", "https://pane.example.com");
+    await wrapper.findAll("button").find((button) => button.text() === "保存并连接")!.trigger("click");
+    expect(updateRemoteSettings).toHaveBeenCalledWith({ enabled: true, relayUrl: "https://pane.example.com" });
+    await wrapper.findAll("button").find((button) => button.text() === "生成配对二维码")!.trigger("click");
+    expect(beginRemotePairing).toHaveBeenCalledOnce();
   });
 });

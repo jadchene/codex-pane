@@ -35,6 +35,7 @@ Codex Pane 是基于 Codex app-server 的 Windows 11 本机 Codex 工作台。�
 - 添加本地文件和图片，也可直接粘贴图片。
 - 在输入区切换模型、推理强度和权限模式。
 - 在设置中复制已脱敏的连接与协议诊断，便于排查问题。
+- 通过可选的自托管中转服务，在 Passkey 保护的手机网页中继续简单对话。
 - 使用 `F11` 进入或退出全屏；全屏时也可按 `Esc` 或点击右上角按钮退出。
 
 批量添加附件时，无法读取的文件会单独报告，已经成功导入的文件会保留。MCP 表单与选项回答都需要明确点击提交，不会在选择时立即发送。
@@ -42,6 +43,12 @@ Codex Pane 是基于 Codex app-server 的 Windows 11 本机 Codex 工作台。�
 命令：`/agents`、`/cd`、`/compact`、`/fast`、`/goal`、`/mcp`、`/new`、`/permissions`、`/plan`、`/ps`、`/rename`、`/resume`、`/review`、`/skills`、`/status`、`/stop`。
 
 应用数据保存在程序旁的 `data` 目录中。
+
+## 远程访问
+
+远程访问默认关闭。先部署 [`remote/relay`](remote/relay) 中的极简中转服务，再进入“设置 → 远程访问”，填写 HTTPS 地址、保存并生成配对二维码。手机会创建 Passkey 和设备密钥；只有核对手机与桌面的 6 位确认码并在桌面确认后，该手机才会获得访问权限。
+
+中转服务没有账号数据库，也无法读取远程消息；它只提供稳定的引导页并透传端到端密文。手机业务页面由桌面端提供，Passkey 验证和设备授权也由桌面在本地完成，桌面仍是唯一的 app-server 调用方。手机端支持查看、新建和切换会话、发送纯文本，以及对符合条件的命令或 MCP 操作做一次性确认。模型、权限、工作目录、文件审批、凭据和其他高风险控制仍只能在桌面处理。Docker Compose 部署方式见[远程端部署说明](remote/README.zh-CN.md)。
 
 ## 开发
 
@@ -53,6 +60,8 @@ npm run dev
 npm run verify
 npm run package:win
 ```
+
+中转服务和手机端分别位于 `remote/relay` 与 `remote/mobile`，各自维护依赖和构建命令。
 
 `package:win` 只生成 `release/win-unpacked` 免安装目录，用户数据保存在其同级 `data` 目录中。
 

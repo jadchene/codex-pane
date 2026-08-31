@@ -7,8 +7,8 @@ import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeTheme, protocol, 
 import { AppServerSupervisor } from "./app-server-supervisor.js";
 import { FileStore } from "./file-store.js";
 import { MediaStore } from "./media-store.js";
-import { StateStore, type WorkspaceState } from "./persistence.js";
-import { safeRequestSchema, serverResponseSchema, type AttachmentBatch, type FileReference, type MediaAttachment, type ProtocolEvent } from "../shared/contracts.js";
+import { StateStore, workspaceStateSchema, type WorkspaceState } from "./persistence.js";
+import { remoteCredentialIdSchema, remoteSettingsSchema, safeRequestSchema, serverResponseSchema, type AttachmentBatch, type FileReference, type MediaAttachment, type ProtocolEvent } from "../shared/contracts.js";
 import { RuntimeProtocolValidator } from "../../packages/protocol/src/runtime-validator.js";
 import { DiagnosticLog } from "./diagnostic-log.js";
 import { useCodexArgsPrefixForTests, useCodexFixtureForTests } from "./codex-process.js";
@@ -17,12 +17,15 @@ import { isTrustedRendererUrl, rendererEntryUrl } from "./renderer-trust.js";
 import { fitWindowBounds } from "./window-bounds.js";
 import { mediaRequestId } from "./media-protocol.js";
 import { redactSensitiveText } from "./sensitive-data.js";
+import { RemoteBridge } from "./remote-bridge.js";
+import { RemoteAuditLog } from "./remote-audit-log.js";
+import { RemoteCredentialStore } from "./remote-credential-store.js";
 
 protocol.registerSchemesAsPrivileged([
   { scheme: "codex-media", privileges: { secure: true, standard: true, supportFetchAPI: true } }
 ]);
 
-if (!app.isPackaged && process.env.CODEX_PANE_PERFORMANCE_FIXTURE === "1") app.disableHardwareAcceleration();
+if (!app.isPackaged && (process.env.CODEX_PANE_PERFORMANCE_FIXTURE === "1" || process.env.CODEX_PANE_DISABLE_HARDWARE_ACCELERATION === "1")) app.disableHardwareAcceleration();
 
 if (!app.isPackaged && (existsSync(join(app.getAppPath(), ".approval-fixture")) || existsSync(join(app.getAppPath(), ".session-fixture")))) {
   useCodexFixtureForTests(join(app.getAppPath(), "tests", "fixtures", "fake-codex", "fake-app-server.mjs"));
@@ -99,6 +102,7 @@ let mediaStore: MediaStore;
 let fileStore: FileStore;
 let stateStore: StateStore;
 let diagnosticLog: DiagnosticLog;
+let remoteBridge: RemoteBridge;
 let forceClosing = false;
 let shutdownInProgress = false;
 let closeRequestInFlight = false;
@@ -142,6 +146,7 @@ const shutdownApplication = async (): Promise<void> => {
   if (shutdownInProgress) return;
   shutdownInProgress = true;
   try {
+    await remoteBridge?.stop();
     await supervisor.stop();
     if (ownsPrimarySession) removePrimarySessionLock();
     forceClosing = true;
@@ -435,12 +440,19 @@ const registerIpc = (): void => {
   ipcMain.handle("codex:request", async (event, rawRequest: unknown) => {
     assertTrustedSender(event);
     const request = safeRequestSchema.parse(rawRequest);
-    return supervisor.call(request.method, transformManagedAttachments(request.params));
+    if (request.method === "thread/unsubscribe") {
+      await remoteBridge.releaseDesktopThread(request.params.threadId);
+      return {};
+    }
+    const result = await supervisor.call(request.method, transformManagedAttachments(request.params));
+    if (request.method === "thread/resume") remoteBridge.acquireDesktopThread(request.params.threadId);
+    return result;
   });
   ipcMain.handle("codex:respond", async (event, rawResponse: unknown) => {
     assertTrustedSender(event);
     const response = serverResponseSchema.parse(rawResponse);
     supervisor.respondToServer(response.generation, response.id, response.result, response.error);
+    remoteBridge.handleDesktopResponse(response.id);
   });
   ipcMain.handle("codex:reconnect", async (event) => {
     assertTrustedSender(event);
@@ -501,7 +513,7 @@ const registerIpc = (): void => {
     const id = crypto.randomUUID();
     return { id, name: url.pathname.split("/").pop() || `远程图片.${extension}`, url: "codex-media://media/remote", size: 0, kind: "remote", sourceUrl: url.toString() };
   });
-  ipcMain.handle("workspace:save", (event, state: unknown) => {
+  ipcMain.handle("workspace:save", async (event, state: unknown) => {
     assertTrustedSender(event);
     if (!state || typeof state !== "object" || Array.isArray(state)) {
       throw new Error("工作台状态无效。" );
@@ -510,7 +522,7 @@ const registerIpc = (): void => {
     if (!bounds) {
       throw new Error("主窗口尚未就绪。" );
     }
-    return stateStore.save(protectRemoteUrls({
+    const workspace = workspaceStateSchema.parse({
       ...state,
       window: {
         width: bounds.width,
@@ -519,7 +531,10 @@ const registerIpc = (): void => {
         y: bounds.y,
         maximized: mainWindow?.isMaximized() ?? false
       }
-    }));
+    });
+    await stateStore.save(protectRemoteUrls(workspace));
+    const focusedPane = workspace.panes.find((pane) => pane.id === workspace.focusedPaneId) ?? workspace.panes[0];
+    remoteBridge.updateSessionDefaults({ cwd: workspace.defaultCwd || null, model: focusedPane?.model ?? null });
   });
   ipcMain.handle("window:fullscreen", (event, fullScreen: unknown) => {
     assertTrustedSender(event);
@@ -577,6 +592,21 @@ const registerIpc = (): void => {
     await shell.openExternal(url.toString());
   });
   ipcMain.handle("diagnostics:read", (event) => { assertTrustedSender(event); return diagnosticLog.tail(); });
+  ipcMain.handle("remote:status", (event) => { assertTrustedSender(event); return remoteBridge.status; });
+  ipcMain.handle("remote:settings", (event, rawSettings: unknown) => {
+    assertTrustedSender(event);
+    return remoteBridge.updateSettings(remoteSettingsSchema.parse(rawSettings));
+  });
+  ipcMain.handle("remote:pairing-begin", (event) => { assertTrustedSender(event); return remoteBridge.beginPairing(); });
+  ipcMain.handle("remote:pairing-confirm", (event, rawPairingId: unknown) => {
+    assertTrustedSender(event);
+    return remoteBridge.confirmPairing(remoteCredentialIdSchema.parse(rawPairingId));
+  });
+  ipcMain.handle("remote:passkey-revoke", (event, rawCredentialId: unknown) => {
+    assertTrustedSender(event);
+    return remoteBridge.revokePasskey(remoteCredentialIdSchema.parse(rawCredentialId));
+  });
+  ipcMain.handle("remote:logout-all", (event) => { assertTrustedSender(event); remoteBridge.logoutAllMobiles(); });
 };
 
 const pendingDeltaEvents = new Map<string, ProtocolEvent>();
@@ -620,12 +650,14 @@ const bufferDeltaEvent = (event: ProtocolEvent): boolean => {
 supervisor.on("state", (state) => {
   if (pendingDeltaEvents.size) flushDeltaEvents();
   mainWindow?.webContents.send("codex:state", state);
+  remoteBridge?.handleConnectionState(state);
 });
 supervisor.on("protocol", (event) => {
   if (event.kind === "diagnostic") {
     void diagnosticLog?.write(event.payload).catch(() => undefined);
     return;
   }
+  remoteBridge?.handleProtocolEvent(event);
   if (bufferDeltaEvent(event)) return;
   if (event.kind === "notification" && pendingDeltaEvents.size) flushDeltaEvents();
   mainWindow?.webContents.send("codex:event", event);
@@ -644,6 +676,15 @@ app.whenReady().then(async () => {
   }
   diagnosticLog = new DiagnosticLog(join(dataDirectory, "logs"));
   await diagnosticLog.initialize();
+  remoteBridge = new RemoteBridge(
+    supervisor,
+    new RemoteCredentialStore(join(dataDirectory, "remote", "credentials.json")),
+    new RemoteAuditLog(join(dataDirectory, "remote", "audit.jsonl"))
+  );
+  const initialRemotePane = persistedWorkspace?.panes.find((pane) => pane.id === persistedWorkspace.focusedPaneId) ?? persistedWorkspace?.panes[0];
+  remoteBridge.updateSessionDefaults({ cwd: persistedWorkspace?.defaultCwd || null, model: initialRemotePane?.model ?? null });
+  remoteBridge.on("status", (status) => mainWindow?.webContents.send("remote:status-changed", status));
+  await remoteBridge.initialize();
   protocol.handle("codex-media", async (request) => {
     const id = mediaRequestId(request.url, request.method);
     if (!id) return new Response("Not found", { status: 404, headers: { "Content-Type": "text/plain", "X-Content-Type-Options": "nosniff" } });

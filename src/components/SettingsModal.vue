@@ -1,6 +1,8 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
-import { NAlert, NButton, NCard, NColorPicker, NDescriptions, NDescriptionsItem, NDivider, NForm, NFormItem, NInput, NInputNumber, NModal, NRadioButton, NRadioGroup, NSelect, NSpace, NSwitch, NTag, NText } from "naive-ui";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
+import QRCode from "qrcode";
+import { NAlert, NButton, NCard, NColorPicker, NDescriptions, NDescriptionsItem, NDivider, NForm, NFormItem, NImage, NInput, NInputNumber, NModal, NPopconfirm, NRadioButton, NRadioGroup, NSelect, NSpace, NSwitch, NTag, NText } from "naive-ui";
+import type { RemoteAccessStatus } from "../../electron/shared/contracts";
 import { useWorkspaceStore } from "../stores/workspace";
 import type { AppearanceSettings, ThemeMode, WorkspaceMode } from "../types";
 
@@ -29,6 +31,20 @@ const diagnosticsState = ref<"idle" | "copying" | "copied" | "empty" | "error">(
 const diagnosticsError = ref("");
 const runtimeAction = ref<"idle" | "choosing" | "clearing">("idle");
 const runtimeError = ref("");
+const remoteStatus = ref<RemoteAccessStatus>({ enabled: false, phase: "disabled", message: "远程访问已关闭", relayUrl: "", paired: false, pairing: null, passkeys: [] });
+const remoteEnabled = ref(false);
+const relayUrl = ref("");
+const remoteBusy = ref(false);
+const remoteError = ref("");
+const pairingQr = ref("");
+const pairingClock = ref(Date.now());
+const pairingClockTimer = window.setInterval(() => { pairingClock.value = Date.now(); }, 1_000);
+const pairingSecondsRemaining = computed(() => Math.max(0, Math.ceil(((remoteStatus.value.pairing?.expiresAt ?? 0) - pairingClock.value) / 1_000)));
+const pairingExpired = computed(() => Boolean(remoteStatus.value.pairing) && pairingSecondsRemaining.value === 0);
+const pairingTimeLabel = computed(() => {
+  const seconds = pairingSecondsRemaining.value;
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+});
 const fontOptions = computed(() => [...new Set([fontFamily.value, ...systemFonts.value].filter(Boolean))].map((family) => ({ label: family, value: family })));
 const display = (value: string | null | undefined): string => value || "—";
 const noSpellcheckInputProps = { spellcheck: false, autocorrect: "off", autocapitalize: "off" } as const;
@@ -81,7 +97,46 @@ const runRuntimeAction = async (action: "choosing" | "clearing"): Promise<void> 
     runtimeAction.value = "idle";
   }
 };
-watch(() => props.show, (show) => { if (show) void loadSystemFonts(); }, { immediate: true });
+const syncRemoteStatus = async (status?: RemoteAccessStatus): Promise<void> => {
+  const current = status ?? await window.codexPane?.getRemoteAccessStatus?.();
+  if (!current) return;
+  remoteStatus.value = current;
+  remoteEnabled.value = remoteStatus.value.enabled;
+  relayUrl.value = remoteStatus.value.relayUrl;
+  pairingQr.value = remoteStatus.value.pairing ? await QRCode.toDataURL(remoteStatus.value.pairing.url, { width: 220, margin: 1, errorCorrectionLevel: "M" }) : "";
+};
+const saveRemoteSettings = async (): Promise<void> => {
+  remoteBusy.value = true;
+  remoteError.value = "";
+  try {
+    await syncRemoteStatus(await window.codexPane.updateRemoteSettings({ enabled: remoteEnabled.value, relayUrl: relayUrl.value.trim() }));
+  }
+  catch (error) { remoteError.value = error instanceof Error ? error.message : String(error); }
+  finally { remoteBusy.value = false; }
+};
+const beginPairing = async (): Promise<void> => {
+  remoteBusy.value = true;
+  remoteError.value = "";
+  try { await syncRemoteStatus(await window.codexPane.beginRemotePairing()); }
+  catch (error) { remoteError.value = error instanceof Error ? error.message : String(error); }
+  finally { remoteBusy.value = false; }
+};
+const confirmPairing = async (): Promise<void> => {
+  if (!remoteStatus.value.pairing) return;
+  remoteBusy.value = true;
+  try { await window.codexPane.confirmRemotePairing(remoteStatus.value.pairing.pairingId); }
+  catch (error) { remoteError.value = error instanceof Error ? error.message : String(error); }
+  finally { remoteBusy.value = false; }
+};
+const removePasskey = async (id: string): Promise<void> => {
+  try { await window.codexPane.revokeRemotePasskey(id); } catch (error) { remoteError.value = error instanceof Error ? error.message : String(error); }
+};
+const logoutAllMobiles = async (): Promise<void> => {
+  try { await window.codexPane.logoutAllRemoteMobiles(); } catch (error) { remoteError.value = error instanceof Error ? error.message : String(error); }
+};
+const unsubscribeRemoteStatus = window.codexPane?.onRemoteAccessStatus?.((status) => { void syncRemoteStatus(status); }) ?? (() => undefined);
+onBeforeUnmount(() => { window.clearInterval(pairingClockTimer); unsubscribeRemoteStatus(); });
+watch(() => props.show, (show) => { if (show) void Promise.all([loadSystemFonts(), syncRemoteStatus()]); }, { immediate: true });
 </script>
 
 <template>
@@ -107,6 +162,33 @@ watch(() => props.show, (show) => { if (show) void loadSystemFonts(); }, { immed
             </NRadioGroup>
           </NFormItem>
         </NForm>
+      </section>
+      <NDivider />
+      <section class="settings-section">
+        <div class="settings-section-heading"><NText strong>远程访问</NText><NTag :type="remoteStatus.phase === 'connected' ? 'success' : remoteStatus.phase === 'error' ? 'error' : 'default'">{{ remoteStatus.message }}</NTag></div>
+        <NForm label-placement="left" label-width="148" class="settings-form">
+          <NFormItem label="启用远程访问"><NSwitch v-model:value="remoteEnabled" /></NFormItem>
+          <NFormItem label="中转服务地址"><NInput v-model:value="relayUrl" :input-props="noSpellcheckInputProps" placeholder="https://pane.example.com" /></NFormItem>
+          <NFormItem label="连接设置"><NSpace><NButton type="primary" secondary :loading="remoteBusy" @click="saveRemoteSettings">保存并连接</NButton><NButton v-if="remoteEnabled" secondary :disabled="remoteBusy" @click="beginPairing">{{ remoteStatus.paired ? '添加手机' : '生成配对二维码' }}</NButton></NSpace></NFormItem>
+        </NForm>
+        <NAlert v-if="remoteError" type="error" closable @close="remoteError = ''">{{ remoteError }}</NAlert>
+        <NCard v-if="remoteStatus.pairing" size="small" class="pairing-card">
+          <NSpace align="center" :wrap="false">
+            <NImage v-if="pairingQr" :src="pairingQr" width="160" preview-disabled alt="手机配对二维码" />
+            <div class="pairing-copy">
+              <NText strong>{{ remoteStatus.pairing.readyToConfirm ? '核对确认码' : '用手机扫描并创建 Passkey' }}</NText>
+              <NText v-if="pairingExpired" type="error">二维码已过期，请重新生成。</NText>
+              <NText v-else-if="remoteStatus.pairing.readyToConfirm" depth="3">仅当手机显示相同的数字时确认。</NText>
+              <NText v-else depth="3">等待手机创建 Passkey，二维码将在 {{ pairingTimeLabel }} 后过期。</NText>
+              <div class="pairing-code">{{ remoteStatus.pairing.code }}</div>
+              <NButton type="primary" :loading="remoteBusy" :disabled="pairingExpired || !remoteStatus.pairing.readyToConfirm" @click="confirmPairing">{{ remoteStatus.pairing.readyToConfirm ? '确认并完成绑定' : '等待手机登记' }}</NButton>
+            </div>
+          </NSpace>
+        </NCard>
+        <NCard v-if="remoteStatus.passkeys.length" size="small" title="已绑定手机" class="passkey-card">
+          <div v-for="passkey in remoteStatus.passkeys" :key="passkey.id" class="passkey-row"><div><NText>{{ passkey.name }}</NText><NText depth="3">最近使用：{{ passkey.lastUsedAt ? new Date(passkey.lastUsedAt).toLocaleString() : '尚未使用' }}</NText></div><NPopconfirm @positive-click="removePasskey(passkey.id)"><template #trigger><NButton size="small" tertiary type="error">撤销</NButton></template>撤销后，这部手机将立即无法连接。</NPopconfirm></div>
+          <template #footer><NPopconfirm @positive-click="logoutAllMobiles"><template #trigger><NButton size="small" secondary>退出所有手机</NButton></template>所有手机需要重新使用 Passkey 登录。</NPopconfirm></template>
+        </NCard>
       </section>
       <NDivider />
       <section class="settings-section">
@@ -209,8 +291,16 @@ watch(() => props.show, (show) => { if (show) void loadSystemFonts(); }, { immed
 .settings-form :deep(.n-input-number) { width: 100%; }
 .permission-profiles { margin-top: 12px; }
 .diagnostics-summary, .diagnostics-actions { margin-top: 12px; }
+.pairing-card, .passkey-card { margin-top: 12px; }
+.pairing-copy { display: grid; gap: 8px; }
+.pairing-code { font: 700 28px/1.2 ui-monospace, monospace; letter-spacing: 5px; }
+.passkey-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 8px 0; }
+.passkey-row > div { display: grid; gap: 3px; }
 @media (max-width: 620px) {
   .settings-form :deep(.n-form-item) { grid-template-columns: 1fr !important; }
   .settings-form :deep(.n-form-item-label) { padding-bottom: 5px; text-align: left; }
+  .pairing-card :deep(.n-space) { align-items: center !important; flex-direction: column !important; }
+  .pairing-copy { width: 100%; text-align: center; }
+  .passkey-row { align-items: flex-start; }
 }
 </style>

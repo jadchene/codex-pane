@@ -102,6 +102,33 @@ export type ProtocolEvent = {
   payload: unknown;
 };
 
+export const remoteSettingsSchema = z.object({
+  enabled: z.boolean(),
+  relayUrl: z.string().trim().max(2_048).refine((value) => {
+    if (!value) return true;
+    try {
+      const url = new URL(value);
+      return url.protocol === "https:" || (url.protocol === "http:" && ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname));
+    } catch { return false; }
+  }, "请使用 HTTPS 中转服务地址；本机调试可使用 HTTP")
+}).superRefine((value, context) => {
+  if (value.enabled && !value.relayUrl) context.addIssue({ code: "custom", path: ["relayUrl"], message: "启用远程访问前请填写中转服务地址" });
+});
+
+export const remoteCredentialIdSchema = z.string().min(1).max(2_048);
+
+export type RemoteSettings = z.infer<typeof remoteSettingsSchema>;
+export type RemotePairingInfo = { pairingId: string; url: string; code: string; expiresAt: number; readyToConfirm: boolean };
+export type RemoteAccessStatus = {
+  enabled: boolean;
+  phase: "disabled" | "connecting" | "pairing" | "connected" | "error";
+  message: string;
+  relayUrl: string;
+  paired: boolean;
+  pairing: RemotePairingInfo | null;
+  passkeys: Array<{ id: string; name: string; createdAt: number; lastUsedAt: number | null }>;
+};
+
 export type MediaAttachment = {
   id: string;
   name: string;

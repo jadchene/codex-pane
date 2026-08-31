@@ -3,6 +3,7 @@ data/
 dist/
 dist-electron/
 release/
+remote/mobile/dist-bundle/
 coverage/
 test-results/
 playwright-report/

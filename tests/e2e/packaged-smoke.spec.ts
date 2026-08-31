@@ -7,6 +7,7 @@ import { _electron as electron, expect, test, type ElectronApplication, type Pag
 
 type ProcessEntry = { ProcessId: number; ParentProcessId: number; Name: string; CommandLine: string | null };
 const runLiveChecks = existsSync(resolve(".packaged-live"));
+const electronFlags = ["--no-sandbox", "--disable-gpu", "--in-process-gpu", "--use-angle=swiftshader", "--use-gl=angle"];
 
 const processTable = (): ProcessEntry[] => {
   const output = execFileSync("pwsh", ["-NoProfile", "-Command", "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,CommandLine | ConvertTo-Json -Compress"], { encoding: "utf8" });
@@ -39,7 +40,7 @@ const waitForGone = async (pids: number[]): Promise<void> => {
 
 const launch = (executablePath: string, userDataPath: string): Promise<ElectronApplication> => electron.launch({
   executablePath,
-  args: ["--disable-gpu", "--disable-software-rasterizer"],
+  args: electronFlags,
   env: {
     ...Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => !["CODEX_PANE_E2E_EXE", "CODEX_PANE_PACKAGED_LIVE", "CODEX_PANE_PACKAGED_CONCURRENCY"].includes(entry[0]) && typeof entry[1] === "string")),
     CODEX_PANE_USER_DATA_DIR: userDataPath
@@ -48,7 +49,7 @@ const launch = (executablePath: string, userDataPath: string): Promise<ElectronA
 
 const launchWithDefaultDataPath = (executablePath: string, appDataPath: string): Promise<ElectronApplication> => electron.launch({
   executablePath,
-  args: ["--disable-gpu", "--disable-software-rasterizer"],
+  args: electronFlags,
   env: {
     ...Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => !["APPDATA", "CODEX_PANE_USER_DATA_DIR", "PORTABLE_EXECUTABLE_DIR", "PORTABLE_EXECUTABLE_FILE"].includes(entry[0]) && typeof entry[1] === "string")),
     APPDATA: appDataPath

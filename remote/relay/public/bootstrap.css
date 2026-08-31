@@ -1,0 +1,16 @@
+:root { color: #f5f7fa; background: #0c0d0f; font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif; }
+* { box-sizing: border-box; }
+html, body, #bootstrap { width: 100%; min-height: 100%; margin: 0; }
+body { min-height: 100dvh; background: radial-gradient(circle at top, #18211f 0, #0c0d0f 44%); }
+.screen { min-height: 100dvh; display: grid; place-items: center; padding: 24px; }
+.card { width: min(100%, 390px); padding: 28px; border: 1px solid #2b3035; border-radius: 18px; background: rgba(20, 22, 25, .96); box-shadow: 0 20px 60px rgba(0, 0, 0, .34); text-align: center; }
+.mark { display: grid; place-items: center; width: 52px; height: 52px; margin: 0 auto 16px; border-radius: 15px; background: #10a37f; color: white; font-weight: 800; }
+h1 { margin: 0 0 10px; font-size: 24px; }
+p { margin: 0 0 18px; color: #aeb6bf; line-height: 1.6; }
+button { width: 100%; min-height: 44px; margin-top: 10px; padding: 10px 16px; border: 0; border-radius: 10px; background: #10a37f; color: white; font: inherit; font-weight: 650; cursor: pointer; }
+button.secondary { background: #252a30; }
+button:disabled { opacity: .55; cursor: default; }
+.error { margin-top: 16px; color: #ff8b8b; }
+.code { margin: 14px 0; font: 800 30px/1.2 ui-monospace, monospace; letter-spacing: 5px; color: #fff; }
+.device-list { display: grid; gap: 8px; }
+#mobile-frame { width: 100%; height: 100dvh; border: 0; display: block; background: #0c0d0f; }

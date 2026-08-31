@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { safeRequestSchema, serverResponseSchema } from "../../electron/shared/contracts";
+import { remoteSettingsSchema, safeRequestSchema, serverResponseSchema } from "../../electron/shared/contracts";
 
 describe("renderer IPC contracts", () => {
   it("strips renderer-provided sandbox and approval policy fields", () => {
@@ -14,6 +14,12 @@ describe("renderer IPC contracts", () => {
     expect(() => safeRequestSchema.parse({ method: "config/write", params: {} })).toThrow();
     expect(() => serverResponseSchema.parse({ generation: 1, id: 1, result: {}, error: { code: -1, message: "x" } })).toThrow();
     expect(() => serverResponseSchema.parse({ generation: 1, id: 1 })).toThrow();
+  });
+
+  it("requires HTTPS for remote relays except explicit loopback development", () => {
+    expect(remoteSettingsSchema.parse({ enabled: true, relayUrl: "https://pane.example.com" }).relayUrl).toBe("https://pane.example.com");
+    expect(remoteSettingsSchema.parse({ enabled: true, relayUrl: "http://127.0.0.1:3000" }).relayUrl).toBe("http://127.0.0.1:3000");
+    expect(() => remoteSettingsSchema.parse({ enabled: true, relayUrl: "http://pane.example.com" })).toThrow("HTTPS");
   });
 
   it("allows only the supported thread cwd update and optimistic message identity", () => {

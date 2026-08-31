@@ -35,6 +35,7 @@ Switch modes at any time in Settings.
 - Attach local files and images, or paste images directly.
 - Switch models, reasoning effort, and permission modes from the composer.
 - Copy redacted connection and protocol diagnostics from Settings when troubleshooting.
+- Continue simple conversations from a Passkey-protected mobile web client through the optional self-hosted relay.
 - Use `F11` to enter or leave full screen; `Esc` and the floating top-right action also exit full screen.
 
 When several attachments are added, unreadable files are reported individually while successful imports are kept. MCP forms and choice answers require an explicit submit and are never sent merely by selecting an option.
@@ -42,6 +43,12 @@ When several attachments are added, unreadable files are reported individually w
 Commands: `/agents`, `/cd`, `/compact`, `/fast`, `/goal`, `/mcp`, `/new`, `/permissions`, `/plan`, `/ps`, `/rename`, `/resume`, `/review`, `/skills`, `/status`, `/stop`.
 
 Application data is stored in the `data` directory beside the application.
+
+## Remote Access
+
+Remote access is optional and disabled by default. Deploy the thin relay from [`remote/relay`](remote/relay), then open Settings → Remote Access, enter its HTTPS address, save, and generate a pairing QR code. The phone creates a Passkey and device keys; the desktop activates the phone only after you verify and confirm the matching six-digit code.
+
+The relay has no account database and cannot read remote messages. It serves only a stable bootstrap page and forwards end-to-end encrypted frames. The desktop supplies the matching mobile UI, validates Passkeys, stores device authorization locally, and remains the only app-server client. The mobile client supports viewing, creating, and switching conversations, sending plain text, and one-time confirmation of eligible command or MCP operations. Models, permissions, working directories, file approvals, credentials, and other high-risk controls remain desktop-only. See the [remote deployment guide](remote/README.md) for Docker Compose setup.
 
 ## Development
 
@@ -53,6 +60,8 @@ npm run dev
 npm run verify
 npm run package:win
 ```
+
+The relay and mobile client have independent dependencies and commands under `remote/relay` and `remote/mobile`.
 
 `package:win` produces only the unpacked Windows application in `release/win-unpacked`. User data is stored in its adjacent `data` directory.
 

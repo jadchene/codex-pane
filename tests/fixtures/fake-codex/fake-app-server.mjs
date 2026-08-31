@@ -43,6 +43,9 @@ const resultFor = (method, params = {}) => {
 
 input.on("line", (line) => {
   const message = JSON.parse(line);
+  if (process.env.CODEX_PANE_REQUEST_LOG && message.id !== undefined && message.method) {
+    appendFileSync(process.env.CODEX_PANE_REQUEST_LOG, `${JSON.stringify({ method: message.method, params: message.params })}\n`, "utf8");
+  }
   if (message.method === "initialized" && !approvalSent && existsSync(resolve(".approval-fixture"))) {
     approvalSent = true;
     setTimeout(() => write({
