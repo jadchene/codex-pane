@@ -46,6 +46,7 @@ const pairingTimeLabel = computed(() => {
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 });
 const remoteManagedElsewhere = computed(() => remoteStatus.value.phase === "standby");
+const remoteSaveLabel = computed(() => remoteEnabled.value ? "保存并连接" : remoteStatus.value.enabled ? "保存并关闭" : "保存设置");
 const fontOptions = computed(() => [...new Set([fontFamily.value, ...systemFonts.value].filter(Boolean))].map((family) => ({ label: family, value: family })));
 const display = (value: string | null | undefined): string => value || "—";
 const noSpellcheckInputProps = { spellcheck: false, autocorrect: "off", autocapitalize: "off" } as const;
@@ -125,15 +126,24 @@ const beginPairing = async (): Promise<void> => {
 const confirmPairing = async (): Promise<void> => {
   if (!remoteStatus.value.pairing) return;
   remoteBusy.value = true;
+  remoteError.value = "";
   try { await window.codexPane.confirmRemotePairing(remoteStatus.value.pairing.pairingId); }
   catch (error) { remoteError.value = error instanceof Error ? error.message : String(error); }
   finally { remoteBusy.value = false; }
 };
 const removePasskey = async (id: string): Promise<void> => {
-  try { await window.codexPane.revokeRemotePasskey(id); } catch (error) { remoteError.value = error instanceof Error ? error.message : String(error); }
+  remoteBusy.value = true;
+  remoteError.value = "";
+  try { await window.codexPane.revokeRemotePasskey(id); }
+  catch (error) { remoteError.value = error instanceof Error ? error.message : String(error); }
+  finally { remoteBusy.value = false; }
 };
 const logoutAllMobiles = async (): Promise<void> => {
-  try { await window.codexPane.logoutAllRemoteMobiles(); } catch (error) { remoteError.value = error instanceof Error ? error.message : String(error); }
+  remoteBusy.value = true;
+  remoteError.value = "";
+  try { await window.codexPane.logoutAllRemoteMobiles(); }
+  catch (error) { remoteError.value = error instanceof Error ? error.message : String(error); }
+  finally { remoteBusy.value = false; }
 };
 const unsubscribeRemoteStatus = window.codexPane?.onRemoteAccessStatus?.((status) => { void syncRemoteStatus(status); }) ?? (() => undefined);
 onBeforeUnmount(() => { window.clearInterval(pairingClockTimer); unsubscribeRemoteStatus(); });
@@ -166,11 +176,11 @@ watch(() => props.show, (show) => { if (show) void Promise.all([loadSystemFonts(
       </section>
       <NDivider />
       <section class="settings-section">
-        <div class="settings-section-heading"><NText strong>远程访问</NText><NTag :type="remoteStatus.phase === 'connected' ? 'success' : remoteStatus.phase === 'error' ? 'error' : 'default'">{{ remoteStatus.message }}</NTag></div>
+        <div class="settings-section-heading"><div class="remote-section-title"><NText strong>远程访问</NText><NText depth="3">在手机上查看和继续会话；敏感设置仍只能在桌面操作。</NText></div><NTag :type="remoteStatus.phase === 'connected' ? 'success' : remoteStatus.phase === 'error' ? 'error' : 'default'">{{ remoteStatus.message }}</NTag></div>
         <NForm label-placement="left" label-width="148" class="settings-form">
           <NFormItem label="启用远程访问"><NSwitch v-model:value="remoteEnabled" :disabled="remoteManagedElsewhere" /></NFormItem>
-          <NFormItem label="中转服务地址"><NInput v-model:value="relayUrl" :disabled="remoteManagedElsewhere" :input-props="noSpellcheckInputProps" placeholder="https://pane.example.com" /></NFormItem>
-          <NFormItem label="连接设置"><NSpace><NButton type="primary" secondary :loading="remoteBusy" :disabled="remoteManagedElsewhere" @click="saveRemoteSettings">保存并连接</NButton><NButton v-if="remoteEnabled" secondary :disabled="remoteBusy || remoteManagedElsewhere" @click="beginPairing">{{ remoteStatus.paired ? '添加手机' : '生成配对二维码' }}</NButton></NSpace></NFormItem>
+          <NFormItem label="中转服务地址"><div class="remote-url-field"><NInput v-model:value="relayUrl" :disabled="remoteManagedElsewhere" :input-props="noSpellcheckInputProps" placeholder="https://pane.example.com" /><NText depth="3">填写部署后的 HTTPS 根地址；本机调试可使用 localhost。</NText></div></NFormItem>
+          <NFormItem label="连接设置"><NSpace><NButton type="primary" secondary :loading="remoteBusy" :disabled="remoteManagedElsewhere" @click="saveRemoteSettings">{{ remoteSaveLabel }}</NButton><NButton v-if="remoteEnabled" secondary :disabled="remoteBusy || remoteManagedElsewhere" @click="beginPairing">{{ remoteStatus.paired ? '添加手机' : '生成配对二维码' }}</NButton></NSpace></NFormItem>
         </NForm>
         <NAlert v-if="remoteManagedElsewhere" type="info">为避免手机连接反复中断，同一时间只有一个应用实例提供远程访问。关闭管理中的实例后，请重启本窗口接管。</NAlert>
         <NAlert v-if="remoteError" type="error" closable @close="remoteError = ''">{{ remoteError }}</NAlert>
@@ -182,14 +192,14 @@ watch(() => props.show, (show) => { if (show) void Promise.all([loadSystemFonts(
               <NText v-if="pairingExpired" type="error">二维码已过期，请重新生成。</NText>
               <NText v-else-if="remoteStatus.pairing.readyToConfirm" depth="3">仅当手机显示相同的数字时确认。</NText>
               <NText v-else depth="3">等待手机创建 Passkey，二维码将在 {{ pairingTimeLabel }} 后过期。</NText>
-              <div class="pairing-code">{{ remoteStatus.pairing.code }}</div>
+              <div v-if="remoteStatus.pairing.readyToConfirm" class="pairing-code">{{ remoteStatus.pairing.code }}</div>
               <NButton type="primary" :loading="remoteBusy" :disabled="pairingExpired || !remoteStatus.pairing.readyToConfirm" @click="confirmPairing">{{ remoteStatus.pairing.readyToConfirm ? '确认并完成绑定' : '等待手机登记' }}</NButton>
             </div>
           </NSpace>
         </NCard>
         <NCard v-if="remoteStatus.passkeys.length" size="small" title="已绑定手机" class="passkey-card">
-          <div v-for="passkey in remoteStatus.passkeys" :key="passkey.id" class="passkey-row"><div><NText>{{ passkey.name }}</NText><NText depth="3">最近使用：{{ passkey.lastUsedAt ? new Date(passkey.lastUsedAt).toLocaleString() : '尚未使用' }}</NText></div><NPopconfirm :disabled="remoteManagedElsewhere" @positive-click="removePasskey(passkey.id)"><template #trigger><NButton size="small" tertiary type="error" :disabled="remoteManagedElsewhere">撤销</NButton></template>撤销后，这部手机将立即无法连接。</NPopconfirm></div>
-          <template #footer><NPopconfirm :disabled="remoteManagedElsewhere" @positive-click="logoutAllMobiles"><template #trigger><NButton size="small" secondary :disabled="remoteManagedElsewhere">退出所有手机</NButton></template>所有手机需要重新使用 Passkey 登录。</NPopconfirm></template>
+          <div v-for="passkey in remoteStatus.passkeys" :key="passkey.id" class="passkey-row"><div><NText>{{ passkey.name }}</NText><NText depth="3">绑定时间：{{ new Date(passkey.createdAt).toLocaleString() }}</NText><NText depth="3">最近使用：{{ passkey.lastUsedAt ? new Date(passkey.lastUsedAt).toLocaleString() : '尚未使用' }}</NText></div><NPopconfirm :disabled="remoteBusy || remoteManagedElsewhere" @positive-click="removePasskey(passkey.id)"><template #trigger><NButton size="small" tertiary type="error" :loading="remoteBusy" :disabled="remoteBusy || remoteManagedElsewhere">撤销</NButton></template>撤销后，这部手机将立即无法连接。</NPopconfirm></div>
+          <template #footer><NPopconfirm :disabled="remoteBusy || remoteManagedElsewhere" @positive-click="logoutAllMobiles"><template #trigger><NButton size="small" secondary :loading="remoteBusy" :disabled="remoteBusy || remoteManagedElsewhere">退出所有手机</NButton></template>所有手机需要重新使用 Passkey 登录。</NPopconfirm></template>
         </NCard>
       </section>
       <NDivider />
@@ -283,6 +293,7 @@ watch(() => props.show, (show) => { if (show) void Promise.all([loadSystemFonts(
 .settings-section { min-width: 0; }
 .settings-section-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
 .settings-section-heading > :first-child { font-weight: 700; }
+.remote-section-title, .remote-url-field { display: grid; gap: 4px; min-width: 0; }
 .settings-form { margin-top: 12px; }
 .settings-form :deep(.n-form-item-label), :deep(.n-descriptions-table-header) { font-weight: 600; }
 .directory-value { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

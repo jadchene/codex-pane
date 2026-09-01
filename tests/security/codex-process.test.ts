@@ -1,10 +1,31 @@
-import { mkdir, rm } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { spawnCodex, useCodexFixtureForTests } from "../../electron/main/codex-process";
+import { resolveCodexLaunch, spawnCodex, terminateCodexProcess, useCodexFixtureForTests } from "../../electron/main/codex-process";
 
 describe("Codex process working directory", () => {
+  it("terminates a directly managed Codex process without process-enumeration privileges", async () => {
+    const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore", windowsHide: true });
+    await terminateCodexProcess(child);
+    expect(child.exitCode !== null || child.signalCode !== null).toBe(true);
+  });
+
+  it("resolves the long-lived npm Codex process instead of its short-lived cmd shim", async () => {
+    const root = resolve("test-results", `codex-launch-${randomUUID()}`);
+    const script = join(root, "node_modules", "@openai", "codex", "bin", "codex.js");
+    const target = process.arch === "arm64" ? "aarch64-pc-windows-msvc" : "x86_64-pc-windows-msvc";
+    const platformPackage = process.arch === "arm64" ? "codex-win32-arm64" : "codex-win32-x64";
+    const executable = join(root, "node_modules", "@openai", "codex", "node_modules", "@openai", platformPackage, "vendor", target, "bin", "codex.exe");
+    await Promise.all([mkdir(join(root, "node_modules", "@openai", "codex", "bin"), { recursive: true }), mkdir(dirname(executable), { recursive: true })]);
+    await Promise.all([writeFile(join(root, "codex.cmd"), "@echo off", "utf8"), writeFile(script, "", "utf8"), writeFile(executable, "", "utf8")]);
+    try {
+      expect(resolveCodexLaunch({ PATH: root, ComSpec: "C:\\Windows\\System32\\cmd.exe" })).toEqual({ command: executable, args: [] });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("starts app-server with the explicitly configured global default directory", async () => {
     const cwd = resolve("test-results", `app-server-cwd-${randomUUID()}`);
     await mkdir(cwd, { recursive: true });
@@ -31,3 +52,4 @@ describe("Codex process working directory", () => {
     }
   });
 });
+import { spawn } from "node:child_process";

@@ -166,10 +166,12 @@ const parsePairing = () => {
 };
 
 const beginPairing = async () => {
+  const deviceId = crypto.randomUUID();
+  const deviceType = /iPhone|iPad/i.test(navigator.userAgent) ? "iPhone / iPad" : /Android/i.test(navigator.userAgent) ? "Android 手机" : "手机浏览器";
   pairingDraft = {
     channelId: pairing.channelId,
-    deviceId: crypto.randomUUID(),
-    deviceName: /iPhone|iPad/i.test(navigator.userAgent) ? "iPhone / iPad" : /Android/i.test(navigator.userAgent) ? "Android 手机" : "手机浏览器",
+    deviceId,
+    deviceName: `${deviceType} · ${deviceId.slice(0, 6).toUpperCase()}`,
     signing: await generateStoredKeyPair("ECDSA", ["sign", "verify"]),
     agreement: await generateStoredKeyPair("ECDH", ["deriveBits"]),
     desktopSigningPublicKey: pairing.desktopSigningPublicKey,
@@ -205,12 +207,24 @@ const connect = () => {
     secure = null;
     if (stopped) return;
     if (uiReady && iframe?.contentWindow) iframe.contentWindow.postMessage({ source: "codex-pane-bootstrap", type: "disconnected", message: "与桌面端的安全连接已断开" }, "*");
-    if (event.code === 1008 && event.reason === "Access removed") {
+    if (event.code === 1008 && (event.reason === "Access removed" || event.reason === "Access denied")) {
       stopped = true;
       if (activeBinding) void deleteBinding(activeBinding.channelId);
       iframe = null;
       document.body.replaceChildren(bootstrapRoot);
-      setStatus("这部手机的访问权限已撤销，请在桌面端重新生成二维码。");
+      setStatus("这部手机的绑定已失效，请在桌面端重新生成二维码。");
+      setActions();
+      return;
+    }
+    if (event.code === 1008 && (event.reason === "Pairing rejected" || event.reason === "Pairing replaced")) {
+      stopped = true;
+      setStatus(event.reason === "Pairing replaced" ? "配对已在另一个页面继续，请关闭此页面。" : "配对信息已失效，请在桌面端重新生成二维码。");
+      setActions();
+      return;
+    }
+    if (event.code === 1008 && event.reason === "Origin rejected") {
+      stopped = true;
+      setStatus("中转服务配置错误，请检查 PUBLIC_ORIGIN。");
       setActions();
       return;
     }
@@ -399,7 +413,10 @@ const showBindings = (bindings) => {
   setStatus("选择要连接的桌面端");
   const list = document.createElement("div");
   list.className = "device-list";
-  for (const binding of bindings) list.append(button(binding.deviceName || "Codex Pane 桌面端", () => { activeBinding = binding; setActions(); connect(); }));
+  for (const binding of bindings) {
+    const fingerprint = typeof binding.channelId === "string" ? binding.channelId.slice(0, 6).toUpperCase() : "未知";
+    list.append(button(`Codex Pane · ${fingerprint}`, () => { activeBinding = binding; setActions(); connect(); }));
+  }
   actionsElement.replaceChildren(list);
 };
 

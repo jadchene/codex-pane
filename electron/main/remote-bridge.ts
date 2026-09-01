@@ -168,8 +168,9 @@ export class RemoteBridge extends EventEmitter {
     const peer = this.#peers.get(pairing.peerId);
     if (!peer?.secure || !peer.pendingDevice || !this.#credentials) throw new Error("手机配对连接已经断开，请重新生成二维码。");
     const devices = this.#credentials.devices.filter((device) => device.id !== peer.pendingDevice!.id && device.passkey.id !== peer.pendingDevice!.passkey.id);
-    this.#credentials = { ...this.#credentials, devices: [...devices, peer.pendingDevice] };
-    await this.#credentialStore.save(this.#credentials);
+    const updatedCredentials = { ...this.#credentials, devices: [...devices, peer.pendingDevice] };
+    await this.#credentialStore.save(updatedCredentials);
+    this.#credentials = updatedCredentials;
     await this.#auditLog.write("device.paired", { deviceId: peer.pendingDevice.id, deviceName: peer.pendingDevice.name }).catch(() => undefined);
     this.#sendSecure(peer, { type: "pairing.completed", deviceId: peer.pendingDevice.id });
     this.#pairing = null;
@@ -184,8 +185,9 @@ export class RemoteBridge extends EventEmitter {
     const now = Date.now();
     const target = this.#credentials.devices.find((device) => device.passkey.id === credentialId && device.revokedAt === null);
     if (!target) return;
-    this.#credentials = { ...this.#credentials, devices: this.#credentials.devices.map((device) => device.id === target.id ? { ...device, revokedAt: now } : device) };
-    await this.#credentialStore.save(this.#credentials);
+    const updatedCredentials = { ...this.#credentials, devices: this.#credentials.devices.map((device) => device.id === target.id ? { ...device, revokedAt: now } : device) };
+    await this.#credentialStore.save(updatedCredentials);
+    this.#credentials = updatedCredentials;
     await this.#auditLog.write("device.revoked", { deviceId: target.id, deviceName: target.name }).catch(() => undefined);
     for (const [peerId, peer] of this.#peers) if (peer.deviceId === target.id) this.#peers.delete(peerId);
     this.#sendPolicy();
@@ -553,7 +555,11 @@ export class RemoteBridge extends EventEmitter {
     this.#updateStatus({
       relayUrl: this.#credentials?.relayUrl ?? "",
       paired: active.length > 0,
-      passkeys: active.map((device) => ({ id: device.passkey.id, name: device.name, createdAt: device.createdAt, lastUsedAt: device.passkey.lastUsedAt }))
+      passkeys: active.map((device) => {
+        const fingerprint = device.id.slice(0, 6).toUpperCase();
+        const name = device.name.endsWith(`· ${fingerprint}`) ? device.name : `${device.name} · ${fingerprint}`;
+        return { id: device.passkey.id, name, createdAt: device.createdAt, lastUsedAt: device.passkey.lastUsedAt };
+      })
     });
   }
 
@@ -566,7 +572,7 @@ export class RemoteBridge extends EventEmitter {
     this.#updateStatus({
       enabled: this.#credentials?.enabled ?? false,
       phase: "standby",
-      message: "由另一个应用实例管理；关闭该实例后，请重启本窗口接管",
+      message: "由另一个实例管理",
       pairing: null
     });
   }

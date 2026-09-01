@@ -4,7 +4,7 @@ import { StringDecoder } from "node:string_decoder";
 import { JsonLineParser, RuntimeProtocolValidator, isResponse, isServerRequest, parseEnvelope, type JsonRpcError, type JsonRpcNotification, type JsonRpcResponse, type RequestId } from "../../packages/protocol/src/index.js";
 import { BASELINE, UNREGISTERED_CAPABILITY_REQUEST_METHODS } from "../../packages/protocol/src/method-manifest.js";
 import type { ConnectionState, ProtocolEvent } from "../shared/contracts.js";
-import { forceTerminateProcessTree, spawnCodex } from "./codex-process.js";
+import { spawnCodex, terminateCodexProcess } from "./codex-process.js";
 import { redactSensitiveText } from "./sensitive-data.js";
 
 type PendingCall = {
@@ -410,7 +410,7 @@ export class AppServerSupervisor extends EventEmitter {
     child.stdin.removeAllListeners();
     child.stdout.removeAllListeners();
     child.stderr.removeAllListeners();
-    await forceTerminateProcessTree(child.pid);
+    await terminateCodexProcess(child);
   }
 
   #rejectAll(error: Error): void {
@@ -437,11 +437,11 @@ export class AppServerSupervisor extends EventEmitter {
       };
       const failOversizedOutput = (): void => {
         finish(() => reject(new Error("codex --version 返回内容异常，已停止读取。")));
-        void forceTerminateProcessTree(child.pid);
+        void terminateCodexProcess(child);
       };
       const timer = setTimeout(() => {
         finish(() => reject(new Error("读取 Codex 版本超时。请在终端确认 codex --version 可以正常结束。")));
-        void forceTerminateProcessTree(child.pid);
+        void terminateCodexProcess(child);
       }, 10_000);
       child.stdout!.on("data", (chunk: Buffer) => {
         stdout += chunk.toString();

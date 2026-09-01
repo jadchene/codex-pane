@@ -1,3 +1,7 @@
+{
+  admin off
+}
+
 {$PANE_DOMAIN} {
   encode zstd gzip
   reverse_proxy relay:3000

@@ -20,6 +20,8 @@ const sentDrafts = new Map<string, string>();
 const scrollContainer = ref<HTMLElement | null>(null);
 const followTail = ref(true);
 const unread = ref(0);
+const sessionButton = ref<HTMLButtonElement | null>(null);
+const drawerCloseButton = ref<HTMLButtonElement | null>(null);
 let client: RemoteClient | null = null;
 const approvalResolutions = new Map<string, Extract<MobileItem, { kind: "approval" }>>();
 const markdownCache = new Map<string, { source: string; html: string }>();
@@ -148,7 +150,18 @@ const send = (): void => {
 };
 const newThread = (): void => { if (!desktopReady.value || threadBusy.value) return; try { sendCommand({ type: "thread.new", requestId: crypto.randomUUID() }); } catch (reason) { error.value = reason instanceof Error ? reason.message : String(reason); } };
 const openThread = (threadId: string): void => { if (!desktopReady.value || threadBusy.value) return; sessionMenuOpen.value = false; try { sendCommand({ type: "thread.open", requestId: crypto.randomUUID(), threadId }); } catch (reason) { error.value = reason instanceof Error ? reason.message : String(reason); } };
-const openSessionMenu = (): void => { sessionMenuOpen.value = true; };
+const openSessionMenu = async (): Promise<void> => {
+  sessionMenuOpen.value = true;
+  await nextTick();
+  drawerCloseButton.value?.focus();
+};
+const closeSessionMenu = async (): Promise<void> => {
+  sessionMenuOpen.value = false;
+  await nextTick();
+  sessionButton.value?.focus();
+};
+const toggleSessionMenu = (): void => { if (sessionMenuOpen.value) void closeSessionMenu(); else void openSessionMenu(); };
+const handleKeydown = (event: KeyboardEvent): void => { if (event.key === "Escape" && sessionMenuOpen.value) void closeSessionMenu(); };
 const resolveApproval = (item: Extract<MobileItem, { kind: "approval" }>, decision: "accept" | "decline"): void => {
   if (resolvingApprovals.has(item.id)) return;
   const requestId = crypto.randomUUID();
@@ -163,16 +176,16 @@ const resolveApproval = (item: Extract<MobileItem, { kind: "approval" }>, decisi
     error.value = reason instanceof Error ? reason.message : String(reason);
   }
 };
-onMounted(connect);
-onBeforeUnmount(() => client?.stop());
+onMounted(() => { window.addEventListener("keydown", handleKeydown); connect(); });
+onBeforeUnmount(() => { window.removeEventListener("keydown", handleKeydown); client?.stop(); });
 </script>
 
 <template>
   <NConfigProvider :theme="darkTheme">
   <main class="app-shell">
-    <header><div><h1>{{ snapshot.activeThreadTitle }}</h1><p><span class="status-dot" :class="statusClass" />{{ connectionMessage }} · {{ snapshot.codexMessage }}</p></div><div class="session-menu"><button class="session-button" aria-label="打开会话列表" @click="sessionMenuOpen = !sessionMenuOpen">会话</button><aside v-if="sessionMenuOpen" aria-label="最近会话"><div class="drawer-header"><strong>最近会话</strong></div><div class="drawer-body"><div v-if="!snapshot.threads.length" class="drawer-empty">暂无会话</div><button v-for="thread in snapshot.threads" :key="thread.id" class="thread-row" :class="{ active: thread.id === snapshot.activeThreadId }" :disabled="threadBusy" @click="openThread(thread.id)"><strong>{{ thread.title }}</strong><span>{{ thread.preview }}</span></button></div><div class="drawer-actions"><NButton type="primary" block :disabled="!desktopReady || threadBusy" :loading="threadBusy" @click="newThread(); sessionMenuOpen = false">新建会话</NButton></div></aside></div></header>
+    <header><div><h1>{{ snapshot.activeThreadTitle }}</h1><p><span class="status-dot" :class="statusClass" />{{ connectionMessage }} · {{ snapshot.codexMessage }}</p></div><div class="session-menu"><button ref="sessionButton" class="session-button" aria-label="打开会话列表" :aria-expanded="sessionMenuOpen" @click="toggleSessionMenu">会话</button><button v-if="sessionMenuOpen" class="drawer-backdrop" tabindex="-1" aria-hidden="true" @click="closeSessionMenu" /><aside v-if="sessionMenuOpen" aria-label="最近会话"><div class="drawer-header"><strong>最近会话</strong><button ref="drawerCloseButton" aria-label="关闭会话列表" @click="closeSessionMenu">×</button></div><div class="drawer-body"><div v-if="!snapshot.threads.length" class="drawer-empty">暂无会话</div><button v-for="thread in snapshot.threads" :key="thread.id" class="thread-row" :class="{ active: thread.id === snapshot.activeThreadId }" :disabled="threadBusy" @click="openThread(thread.id)"><strong>{{ thread.title }}</strong><span>{{ thread.preview }}</span></button></div><div class="drawer-actions"><NButton type="primary" block :disabled="!desktopReady || threadBusy" :loading="threadBusy" @click="newThread(); sessionMenuOpen = false">新建会话</NButton></div></aside></div></header>
+    <NAlert v-if="error" class="connection-alert" closable type="warning" @close="error = ''">{{ error }}</NAlert>
     <section ref="scrollContainer" class="conversation" @scroll="handleScroll">
-      <NAlert v-if="error" closable type="warning" @close="error = ''">{{ error }}</NAlert>
       <div v-if="!snapshot.activeThreadId" class="empty-state"><h2>选择一个会话</h2><p>可以继续最近的会话，也可以新建会话。</p></div>
       <article v-for="item in snapshot.items" :key="item.id" class="message" :class="item.kind">
         <div v-if="item.kind === 'user'" class="bubble">{{ item.text }}</div>

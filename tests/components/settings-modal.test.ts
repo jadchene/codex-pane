@@ -142,10 +142,12 @@ describe("SettingsModal", () => {
     } });
     const wrapper = mount(SettingsModal, { props: { show: true }, global: { plugins: [pinia], stubs: { teleport: true } } });
     await vi.waitFor(() => expect(wrapper.text()).toContain("远程访问已关闭"));
+    expect(wrapper.text()).toContain("保存设置");
     const switches = wrapper.findAllComponents(NSwitch);
     switches.find((component) => component.element.closest(".n-form-item")?.textContent?.includes("启用远程访问"))!.vm.$emit("update:value", true);
     const relayInput = wrapper.findAllComponents(NInput).find((input) => input.props("placeholder") === "https://pane.example.com")!;
     relayInput.vm.$emit("update:value", "https://pane.example.com");
+    await wrapper.vm.$nextTick();
     await wrapper.findAll("button").find((button) => button.text() === "保存并连接")!.trigger("click");
     expect(updateRemoteSettings).toHaveBeenCalledWith({ enabled: true, relayUrl: "https://pane.example.com" });
     await wrapper.findAll("button").find((button) => button.text() === "生成配对二维码")!.trigger("click");

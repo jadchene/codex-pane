@@ -189,8 +189,8 @@ test("starts the desktop workbench and connects to Codex", async () => {
     expect(rowBoxes.map((box) => box.top)).toEqual([...rowBoxes.map((box) => box.top)].sort((top, bottom) => top - bottom));
     await selectLayout(window, "四宫格");
     await expect(window.locator(".pane")).toHaveCount(4);
-    await expect(window.getByPlaceholder(/发送消息/)).toHaveCount(4);
-    const firstComposer = window.getByPlaceholder(/发送消息/).first();
+    await expect(window.getByRole("textbox", { name: "消息输入框" })).toHaveCount(4);
+    const firstComposer = window.getByRole("textbox", { name: "消息输入框" }).first();
     expect(await firstComposer.evaluate((element) => (element as HTMLTextAreaElement).spellcheck)).toBe(false);
     const composerSurface = window.locator("[data-pane-id='pane-1'] .n-input");
     const composerBackgroundBeforeFocus = await composerSurface.evaluate((element) => getComputedStyle(element).backgroundColor);
@@ -233,7 +233,7 @@ test("starts the desktop workbench and connects to Codex", async () => {
     await expect(window.getByPlaceholder("按标题或内容搜索历史会话")).toBeVisible();
     await expect(window.getByRole("button", { name: "仅当前目录" })).toBeVisible();
     await expect(window.getByRole("button", { name: "仅当前目录" })).toBeDisabled();
-    await expect(window.getByText("所有工作目录", { exact: true })).toBeVisible();
+    await expect(window.getByText("正在显示所有工作目录", { exact: true })).toBeVisible();
     const sessionPage = window.locator("[data-pane-id='pane-1'] .session-pane-page");
     await expect(sessionPage).toBeVisible();
     const paneBox = await window.locator("[data-pane-id='pane-1']").boundingBox();
@@ -357,7 +357,7 @@ test("completes a real Codex turn", async () => {
     window.on("pageerror", (error) => process.stdout.write(`[live-renderer:error] ${error.message}\n`));
     await expect(window.getByRole("button", { name: "切换窗格布局" })).toBeVisible({ timeout: 20_000 });
     await selectLayout(window, "单窗格");
-    const composer = window.getByPlaceholder(/发送消息/).first();
+    const composer = window.getByRole("textbox", { name: "消息输入框" }).first();
     const initialAgentMessageCount = await window.locator(".message-agent").count();
     await composer.fill("只回复“Codex Pane 联调成功”，不要调用任何工具。" );
     await composer.press("Enter");
@@ -392,7 +392,7 @@ test("rejects a real Codex command approval without executing the command", asyn
     const window = await application.firstWindow();
     await expect(window.getByRole("button", { name: "切换窗格布局" })).toBeVisible({ timeout: 20_000 });
     await selectLayout(window, "单窗格");
-    const composer = window.getByPlaceholder(/发送消息/).first();
+    const composer = window.getByRole("textbox", { name: "消息输入框" }).first();
     await composer.fill(`请只尝试通过命令工具执行 PowerShell 命令 Set-Content -LiteralPath '${targetPath}' -Value 'must-not-exist'。必须第一次就使用 require_escalated 请求批准，不要先在普通沙箱执行；如果我拒绝就立即停止，不要重试，也不要改用文件编辑工具。`);
     await composer.press("Enter");
     await expect(window.getByText("命令需要确认", { exact: true })).toBeVisible({ timeout: 90_000 });
@@ -418,18 +418,18 @@ test("routes four concurrent Codex turns to their own panes", async () => {
     await expect(panes).toHaveCount(4);
     for (let index = 0; index < 4; index += 1) {
       const pane = window.locator(`[data-pane-id="pane-${index + 1}"]`);
-      const paneComposer = pane.getByPlaceholder(/发送消息/);
+      const paneComposer = pane.getByRole("textbox", { name: "消息输入框" });
       await paneComposer.fill("/new");
       await paneComposer.press("Enter");
       await paneComposer.press("Enter");
       await expect(pane.locator(".message-agent")).toHaveCount(0);
     }
     for (let index = 0; index < 4; index += 1) {
-      const composer = window.locator(`[data-pane-id="pane-${index + 1}"]`).getByPlaceholder(/发送消息/);
+      const composer = window.locator(`[data-pane-id="pane-${index + 1}"]`).getByRole("textbox", { name: "消息输入框" });
       await composer.fill(`只回复“PANE-${index + 1}-OK”，不要调用任何工具。`);
     }
     for (let index = 0; index < 4; index += 1) {
-      const composer = window.locator(`[data-pane-id="pane-${index + 1}"]`).getByPlaceholder(/发送消息/);
+      const composer = window.locator(`[data-pane-id="pane-${index + 1}"]`).getByRole("textbox", { name: "消息输入框" });
       await composer.press("Enter");
     }
     await window.waitForTimeout(15_000);

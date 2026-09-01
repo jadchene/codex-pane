@@ -128,12 +128,18 @@ const attachMobile = (connection: Connection, raw: unknown): void => {
   if (body.mode === "device") {
     const publicKey = channel.devices.get(body.deviceId);
     const proof = mobileAttachProof(connection.challenge.connectionId, connection.challenge.nonce, body.channelId, body.deviceId, body.timestamp);
-    if (!publicKey || !proofFresh(body.timestamp) || !verifyP256Signature(publicKey, proof, body.signature)) throw new Error("mobile authorization failed");
+    if (!publicKey || !proofFresh(body.timestamp) || !verifyP256Signature(publicKey, proof, body.signature)) {
+      connection.socket.close(1008, "Access denied");
+      return;
+    }
   } else {
     const pairing = channel.pairing;
-    if (!pairing || pairing.pairingId !== body.pairingId || pairing.expiresAt < Date.now() || !secretMatches(body.pairingSecret, pairing.secretHash)) throw new Error("pairing authorization failed");
+    if (!pairing || pairing.pairingId !== body.pairingId || pairing.expiresAt < Date.now() || !secretMatches(body.pairingSecret, pairing.secretHash)) {
+      connection.socket.close(1008, "Pairing rejected");
+      return;
+    }
     const existingPair = [...channel.mobiles.values()].find((mobile) => mobile.mode === "pairing");
-    if (existingPair) disconnectMobile(channel, existingPair, 1000, "Pairing reconnected");
+    if (existingPair) disconnectMobile(channel, existingPair, 1008, "Pairing replaced");
   }
   const mobile = Object.assign(connection, {
     role: "mobile" as const,

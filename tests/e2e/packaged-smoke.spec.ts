@@ -1,59 +1,98 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
 import { dirname, join, resolve } from "node:path";
-import { _electron as electron, expect, test, type ElectronApplication, type Page } from "@playwright/test";
+import { chromium, expect, test, type Browser, type Page } from "@playwright/test";
 
-type ProcessEntry = { ProcessId: number; ParentProcessId: number; Name: string; CommandLine: string | null };
 const runLiveChecks = existsSync(resolve(".packaged-live"));
 const electronFlags = ["--no-sandbox", "--disable-gpu", "--in-process-gpu", "--use-angle=swiftshader", "--use-gl=angle"];
+type ProcessIdentity = { id: number; startedAt: string };
 
-const processTable = (): ProcessEntry[] => {
-  const output = execFileSync("pwsh", ["-NoProfile", "-Command", "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,CommandLine | ConvertTo-Json -Compress"], { encoding: "utf8" });
-  const parsed = JSON.parse(output) as ProcessEntry | ProcessEntry[];
+const codexProcesses = (): ProcessIdentity[] => {
+  const command = "@(Get-Process codex -ErrorAction SilentlyContinue | ForEach-Object { [pscustomobject]@{ id = $_.Id; startedAt = $_.StartTime.ToUniversalTime().ToString('O') } }) | ConvertTo-Json -Compress";
+  const output = execFileSync("pwsh", ["-NoProfile", "-Command", command], { encoding: "utf8" }).trim();
+  if (!output) return [];
+  const parsed = JSON.parse(output) as ProcessIdentity | ProcessIdentity[];
   return Array.isArray(parsed) ? parsed : [parsed];
 };
 
-const codexDescendants = (rootPid: number): ProcessEntry[] => {
-  const table = processTable();
-  const descendants = new Set([rootPid]);
-  let changed = true;
-  while (changed) {
-    changed = false;
-    for (const process of table) {
-      if (descendants.has(process.ParentProcessId) && !descendants.has(process.ProcessId)) {
-        descendants.add(process.ProcessId);
-        changed = true;
-      }
-    }
-  }
-  return table.filter((process) => descendants.has(process.ProcessId) && /^(codex(?:\.exe)?|cmd\.exe)$/i.test(process.Name) && /app-server/i.test(process.CommandLine ?? ""));
-};
-
-const waitForGone = async (pids: number[]): Promise<void> => {
+const waitForGone = async (processes: ProcessIdentity[]): Promise<void> => {
   await expect.poll(() => {
-    const alive = new Set(processTable().map((process) => process.ProcessId));
-    return pids.filter((pid) => alive.has(pid));
+    const alive = codexProcesses();
+    return processes.filter((process) => alive.some((candidate) => candidate.id === process.id && candidate.startedAt === process.startedAt));
   }, { timeout: 7_000, intervals: [100, 250, 500] }).toEqual([]);
 };
 
-const launch = (executablePath: string, userDataPath: string): Promise<ElectronApplication> => electron.launch({
-  executablePath,
-  args: electronFlags,
-  env: {
-    ...Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => !["CODEX_PANE_E2E_EXE", "CODEX_PANE_PACKAGED_LIVE", "CODEX_PANE_PACKAGED_CONCURRENCY"].includes(entry[0]) && typeof entry[1] === "string")),
-    CODEX_PANE_USER_DATA_DIR: userDataPath
+const freePort = async (): Promise<number> => {
+  const server = createServer();
+  await new Promise<void>((resolvePromise) => server.listen(0, "127.0.0.1", resolvePromise));
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("Unable to reserve a packaged-app debugging port");
+  await new Promise<void>((resolvePromise) => server.close(() => resolvePromise()));
+  return address.port;
+};
+
+class PackagedApplication {
+  readonly #child: ChildProcess;
+  readonly #browser: Browser;
+
+  constructor(child: ChildProcess, browser: Browser) {
+    this.#child = child;
+    this.#browser = browser;
   }
+
+  process(): ChildProcess { return this.#child; }
+
+  async firstWindow(): Promise<Page> {
+    await expect.poll(() => this.#browser.contexts().flatMap((context) => context.pages()).length, { timeout: 20_000 }).toBeGreaterThan(0);
+    return this.#browser.contexts().flatMap((context) => context.pages())[0]!;
+  }
+
+  async close(): Promise<void> {
+    if (this.#child.exitCode !== null) {
+      await this.#browser.close().catch(() => undefined);
+      return;
+    }
+    const page = this.#browser.contexts().flatMap((context) => context.pages()).find((candidate) => !candidate.isClosed());
+    try { await page?.getByRole("button", { name: "关闭" }).click({ timeout: 3_000 }); } catch { /* The window may already be closing. */ }
+    const exited = this.#child.exitCode !== null || await new Promise<boolean>((resolvePromise) => {
+      const timer = setTimeout(() => resolvePromise(false), 7_000);
+      this.#child.once("exit", () => { clearTimeout(timer); resolvePromise(true); });
+    });
+    if (!exited && this.#child.pid) {
+      try { execFileSync("taskkill.exe", ["/pid", String(this.#child.pid), "/t", "/f"], { stdio: "ignore", windowsHide: true }); } catch { /* The application may have exited during fallback cleanup. */ }
+    }
+    await this.#browser.close().catch(() => undefined);
+  }
+}
+
+const launchPackaged = async (executablePath: string, environment: Record<string, string>): Promise<PackagedApplication> => {
+  const port = await freePort();
+  const child = spawn(executablePath, [...electronFlags, `--remote-debugging-port=${port}`], { env: environment, stdio: "ignore", windowsHide: true });
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (child.exitCode !== null) throw new Error(`Packaged application exited with code ${child.exitCode}`);
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/json/version`);
+      if (response.ok) return new PackagedApplication(child, await chromium.connectOverCDP(`http://127.0.0.1:${port}`));
+    } catch { /* Chromium is still starting. */ }
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 100));
+  }
+  if (child.pid) {
+    try { execFileSync("taskkill.exe", ["/pid", String(child.pid), "/t", "/f"], { stdio: "ignore", windowsHide: true }); } catch { /* The process may already have exited. */ }
+  }
+  throw new Error("Packaged application did not expose its test-only Chromium endpoint");
+};
+
+const launch = (executablePath: string, userDataPath: string): Promise<PackagedApplication> => launchPackaged(executablePath, {
+  ...Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => !["CODEX_PANE_E2E_EXE", "CODEX_PANE_PACKAGED_LIVE", "CODEX_PANE_PACKAGED_CONCURRENCY"].includes(entry[0]) && typeof entry[1] === "string")),
+  CODEX_PANE_USER_DATA_DIR: userDataPath
 });
 
-const launchWithDefaultDataPath = (executablePath: string, appDataPath: string): Promise<ElectronApplication> => electron.launch({
-  executablePath,
-  args: electronFlags,
-  env: {
-    ...Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => !["APPDATA", "CODEX_PANE_USER_DATA_DIR", "PORTABLE_EXECUTABLE_DIR", "PORTABLE_EXECUTABLE_FILE"].includes(entry[0]) && typeof entry[1] === "string")),
-    APPDATA: appDataPath
-  }
+const launchWithDefaultDataPath = (executablePath: string, appDataPath: string): Promise<PackagedApplication> => launchPackaged(executablePath, {
+  ...Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => !["APPDATA", "CODEX_PANE_USER_DATA_DIR", "PORTABLE_EXECUTABLE_DIR", "PORTABLE_EXECUTABLE_FILE"].includes(entry[0]) && typeof entry[1] === "string")),
+  APPDATA: appDataPath
 });
 
 const waitForWorkbench = async (window: Page): Promise<void> => {
@@ -98,8 +137,8 @@ test("keeps Electron and Chromium data beside the unpacked executable", async ()
   const isolatedAppData = join(runRoot, "appdata");
   const executablePath = join(unpackedRoot, "Codex Pane.exe");
   const expectedDataPath = join(unpackedRoot, "data");
-  let application: ElectronApplication | null = null;
-  let secondApplication: ElectronApplication | null = null;
+  let application: PackagedApplication | null = null;
+  let secondApplication: PackagedApplication | null = null;
   try {
     await mkdir(runRoot, { recursive: true });
     await cp(dirname(sourceExecutable!), unpackedRoot, { recursive: true });
@@ -112,10 +151,8 @@ test("keeps Electron and Chromium data beside the unpacked executable", async ()
     const window = await application.firstWindow();
     await waitForWorkbench(window);
     await verifyWindowChrome(window);
-    const paths = await application.evaluate(({ app }) => ({ userData: app.getPath("userData"), sessionData: app.getPath("sessionData") }));
-    expect(paths.userData.toLowerCase()).toBe(expectedDataPath.toLowerCase());
-    expect(paths.sessionData.toLowerCase()).toContain(join(expectedDataPath, "chromium").toLowerCase());
-    expect(paths.sessionData.toLowerCase()).not.toBe(expectedDataPath.toLowerCase());
+    const primarySessionPath = join(expectedDataPath, "chromium", "primary");
+    await expect.poll(() => existsSync(primarySessionPath)).toBe(true);
     await selectLayout(window, "四宫格");
     await window.waitForTimeout(800);
     const secondModelSelect = window.locator("[data-pane-id='pane-2'] .model-select");
@@ -132,9 +169,7 @@ test("keeps Electron and Chromium data beside the unpacked executable", async ()
     secondApplication = await launchWithDefaultDataPath(executablePath, isolatedAppData);
     const secondWindow = await secondApplication.firstWindow();
     await waitForWorkbench(secondWindow);
-    const secondPaths = await secondApplication.evaluate(({ app }) => ({ userData: app.getPath("userData"), sessionData: app.getPath("sessionData") }));
-    expect(secondPaths.userData.toLowerCase()).toBe(expectedDataPath.toLowerCase());
-    expect(secondPaths.sessionData.toLowerCase()).not.toBe(paths.sessionData.toLowerCase());
+    await expect.poll(() => existsSync(join(expectedDataPath, "chromium", String(secondApplication!.process().pid)))).toBe(true);
     expect(secondApplication.process().pid).not.toBe(application.process().pid);
     await application.close();
     application = null;
@@ -151,8 +186,10 @@ test("verifies the packaged Windows executable, protected persistence, reconnect
   const executablePath = process.env.CODEX_PANE_PACKAGED_EXE;
   test.skip(!executablePath, "Set CODEX_PANE_PACKAGED_EXE to run the packaged executable smoke test.");
   const userDataPath = resolve("test-results", `packaged-user-data-${randomUUID()}`);
+  const baselineCodexPids = new Set(codexProcesses().map((process) => process.id));
+  const testCodexProcesses = (): ProcessIdentity[] => codexProcesses().filter((process) => !baselineCodexPids.has(process.id));
   let application = await launch(executablePath!, userDataPath);
-  let trackedPids: number[] = [];
+  let trackedProcesses: ProcessIdentity[] = [];
   try {
     const window = await application.firstWindow();
     const securityViolations: string[] = [];
@@ -166,23 +203,29 @@ test("verifies the packaged Windows executable, protected persistence, reconnect
     expect(csp).not.toContain("__CODEX_PANE_CSP__");
     expect(csp).not.toMatch(/localhost|127\.0\.0\.1|ws:|unsafe-eval/i);
 
-    const composer = window.getByPlaceholder(/发送消息/).first();
+    const composer = window.getByRole("textbox", { name: "消息输入框" }).first();
     await window.evaluate(() => (globalThis as typeof globalThis & { codexPane: { copyText: (value: string) => Promise<void> } }).codexPane.copyText("Codex Pane 复制测试"));
-    expect(await application.evaluate(({ clipboard }) => clipboard.readText())).toBe("Codex Pane 复制测试");
-    await application.evaluate(({ clipboard }) => clipboard.writeText("https://example.com/pasted-image.png"));
+    await composer.focus();
+    await window.keyboard.press("Control+V");
+    await expect(composer).toHaveValue("Codex Pane 复制测试");
+    await composer.fill("");
+    execFileSync("pwsh", ["-NoProfile", "-Command", "Set-Clipboard -Value $env:CODEX_PANE_CLIPBOARD_TEXT"], {
+      windowsHide: true,
+      env: { ...process.env, CODEX_PANE_CLIPBOARD_TEXT: "https://example.com/pasted-image.png" }
+    });
     await composer.focus();
     await window.keyboard.press("Control+V");
     await expect(composer).toHaveValue("https://example.com/pasted-image.png");
     await expect(window.getByText("pasted-image.png", { exact: true })).toHaveCount(0);
     await composer.fill("");
 
-    const firstTree = codexDescendants(application.process().pid!).map((process) => process.ProcessId);
+    const firstTree = testCodexProcesses();
     expect(firstTree.length).toBeGreaterThan(0);
     await window.evaluate(() => (globalThis as typeof globalThis & { codexPane: { reconnect: () => Promise<void> } }).codexPane.reconnect());
     await waitForGone(firstTree);
-    await expect.poll(() => codexDescendants(application.process().pid!).length, { timeout: 20_000 }).toBeGreaterThan(0);
-    trackedPids = codexDescendants(application.process().pid!).map((process) => process.ProcessId);
-    expect(trackedPids.length).toBeGreaterThan(0);
+    await expect.poll(() => testCodexProcesses().length, { timeout: 20_000 }).toBeGreaterThan(0);
+    trackedProcesses = testCodexProcesses();
+    expect(trackedProcesses.length).toBeGreaterThan(0);
     expect(securityViolations).toEqual([]);
 
     if (runLiveChecks) {
@@ -194,10 +237,10 @@ test("verifies the packaged Windows executable, protected persistence, reconnect
       expect((await shortReply.boundingBox())?.height ?? 1000).toBeLessThan(64);
       expect(await shortReply.locator(".copy-message-button").evaluate((element) => getComputedStyle(element).position)).toBe("absolute");
       const imagePath = resolve("node_modules/app-builder-lib/templates/icons/electron-linux/64x64.png");
-      await application.evaluate(async ({ ClipboardItem, clipboard, nativeImage }, path) => {
-        const png = Uint8Array.from(nativeImage.createFromPath(path).toPNG());
-        await clipboard.write([new ClipboardItem({ "image/png": new Blob([png], { type: "image/png" }) })]);
-      }, imagePath);
+      execFileSync("pwsh", ["-Sta", "-NoProfile", "-Command", "Add-Type -AssemblyName System.Windows.Forms; Add-Type -AssemblyName System.Drawing; $image = [System.Drawing.Image]::FromFile($env:CODEX_PANE_CLIPBOARD_IMAGE); try { [System.Windows.Forms.Clipboard]::SetImage($image) } finally { $image.Dispose() }"], {
+        windowsHide: true,
+        env: { ...process.env, CODEX_PANE_CLIPBOARD_IMAGE: imagePath }
+      });
       await composer.focus();
       await window.keyboard.press("Control+V");
       await expect(window.getByRole("button", { name: "移除 剪贴板图片.png" })).toBeVisible();
@@ -212,25 +255,25 @@ test("verifies the packaged Windows executable, protected persistence, reconnect
   } finally {
     await application.close();
   }
-  await waitForGone(trackedPids);
+  await waitForGone(trackedProcesses);
 
   application = await launch(executablePath!, userDataPath);
   try {
     const window = await application.firstWindow();
     await waitForWorkbench(window);
-    if (!runLiveChecks) await expect(window.getByPlaceholder(/发送消息/).first()).toHaveValue("");
+    if (!runLiveChecks) await expect(window.getByRole("textbox", { name: "消息输入框" }).first()).toHaveValue("");
     if (runLiveChecks) {
       await selectLayout(window, "四宫格");
       for (let index = 0; index < 4; index += 1) {
         const pane = window.locator(`[data-pane-id="pane-${index + 1}"]`);
-        const paneComposer = pane.getByPlaceholder(/发送消息/);
+        const paneComposer = pane.getByRole("textbox", { name: "消息输入框" });
         await paneComposer.fill("/new");
         await paneComposer.press("Enter");
         await paneComposer.press("Enter");
         await paneComposer.fill(`只回复“PANE-${index + 1}-OK”，不要调用任何工具。`);
       }
       for (let index = 0; index < 4; index += 1) {
-        await window.locator(`[data-pane-id="pane-${index + 1}"]`).getByPlaceholder(/发送消息/).press("Enter");
+        await window.locator(`[data-pane-id="pane-${index + 1}"]`).getByRole("textbox", { name: "消息输入框" }).press("Enter");
       }
       for (let index = 0; index < 4; index += 1) {
         const messages = window.locator(`[data-pane-id="pane-${index + 1}"] .message-agent`);
@@ -238,9 +281,9 @@ test("verifies the packaged Windows executable, protected persistence, reconnect
         await expect(messages.last()).toContainText(`PANE-${index + 1}-OK`, { timeout: 90_000 });
       }
     }
-    trackedPids = codexDescendants(application.process().pid!).map((process) => process.ProcessId);
+    trackedProcesses = testCodexProcesses();
   } finally {
     await application.close();
   }
-  await waitForGone(trackedPids);
+  await waitForGone(trackedProcesses);
 });

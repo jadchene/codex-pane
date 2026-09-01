@@ -11,6 +11,25 @@ const input = createInterface({ input: process.stdin });
 const write = (message) => process.stdout.write(`${JSON.stringify(message)}\n`);
 let approvalSent = false;
 
+const sendApproval = (threadId = "fixture-thread") => {
+  approvalSent = true;
+  write({
+    id: "approval-fixture-1",
+    method: "item/commandExecution/requestApproval",
+    params: {
+      threadId,
+      turnId: "fixture-turn",
+      itemId: "fixture-item",
+      startedAtMs: Date.now(),
+      environmentId: null,
+      reason: "验证完整审批链路",
+      command: "Get-ChildItem",
+      cwd: "E:\\AI-Workspace",
+      availableDecisions: ["accept", "decline"]
+    }
+  });
+};
+
 const resultFor = (method, params = {}) => {
   if (method === "initialize") return {
     userAgent: "codex-pane-fixture/0.149.1",
@@ -31,6 +50,9 @@ const resultFor = (method, params = {}) => {
     ],
     nextCursor: null
   };
+  if (method === "thread/start") return {
+    thread: { id: "fixture-thread-new", name: "手机新会话", cwd: "E:\\AI-Workspace", turns: [] }
+  };
   if (method === "thread/resume") return {
     thread: { id: params.threadId, name: params.threadId === "fixture-thread-b" ? "示例会话 B" : "示例会话 A", turns: [] },
     initialTurnsPage: { data: [], nextCursor: null },
@@ -48,27 +70,18 @@ input.on("line", (line) => {
   }
   if (message.method === "initialized" && !approvalSent && existsSync(resolve(".approval-fixture"))) {
     approvalSent = true;
-    setTimeout(() => write({
-      id: "approval-fixture-1",
-      method: "item/commandExecution/requestApproval",
-      params: {
-        threadId: "fixture-thread",
-        turnId: "fixture-turn",
-        itemId: "fixture-item",
-        startedAtMs: Date.now(),
-        environmentId: null,
-        reason: "验证完整审批链路",
-        command: "Get-ChildItem",
-        cwd: "E:\\AI-Workspace",
-        availableDecisions: ["accept", "decline"]
-      }
-    }), 500);
+    setTimeout(() => sendApproval(), 500);
     return;
   }
   if (message.id === "approval-fixture-1" && message.method === undefined) {
-    appendFileSync(resolve("test-results", "approval-response.jsonl"), `${JSON.stringify(message)}\n`, "utf8");
+    appendFileSync(process.env.CODEX_PANE_APPROVAL_RESPONSE_LOG || resolve("test-results", "approval-response.jsonl"), `${JSON.stringify(message)}\n`, "utf8");
     write({ method: "serverRequest/resolved", params: { requestId: "approval-fixture-1" } });
     return;
   }
-  if (message.id !== undefined && message.method) write({ id: message.id, result: resultFor(message.method, message.params) });
+  if (message.id !== undefined && message.method) {
+    write({ id: message.id, result: resultFor(message.method, message.params) });
+    if (message.method === "turn/start" && process.env.CODEX_PANE_APPROVAL_ON_TURN_START === "1" && !approvalSent) {
+      setTimeout(() => sendApproval(message.params?.threadId || "fixture-thread"), 50);
+    }
+  }
 });
