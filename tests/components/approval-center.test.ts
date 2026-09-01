@@ -102,16 +102,28 @@ describe("ApprovalCenter request lifecycle UI", () => {
     expect(wrapper.emitted("resolve")?.at(-1)).toEqual([userInput, { answers: { purpose: { answers: ["用于验收"] } } }]);
   });
 
-  it("requires an explicit confirmation after selecting a user-input choice", async () => {
+  it("submits a user-input choice immediately without a redundant button", async () => {
     const userInput = request("question-choice", "item/tool/requestUserInput", "pane-1", {
       questions: [{ id: "mode", header: "模式", question: "请选择模式", options: [{ label: "安全", description: "只读执行" }, { label: "完整", description: "允许修改" }] }]
     });
     const wrapper = mountCenter([userInput]);
-    expect(wrapper.text()).toContain("提交回答");
+    expect(wrapper.text()).not.toContain("提交回答");
+    await clickButton(wrapper, "安全");
+    expect(wrapper.emitted("resolve")).toEqual([[userInput, { answers: { mode: { answers: ["安全"] } } }]]);
+  });
+
+  it("submits multiple choices when the final question is answered", async () => {
+    const userInput = request("question-choices", "item/tool/requestUserInput", "pane-1", {
+      questions: [
+        { id: "mode", question: "请选择模式", options: [{ label: "安全" }, { label: "完整" }] },
+        { id: "target", question: "请选择目标", options: [{ label: "当前" }, { label: "全部" }] }
+      ]
+    });
+    const wrapper = mountCenter([userInput]);
     await clickButton(wrapper, "安全");
     expect(wrapper.emitted("resolve")).toBeUndefined();
-    await clickButton(wrapper, "提交回答");
-    expect(wrapper.emitted("resolve")).toEqual([[userInput, { answers: { mode: { answers: ["安全"] } } }]]);
+    await clickButton(wrapper, "当前");
+    expect(wrapper.emitted("resolve")).toEqual([[userInput, { answers: { mode: { answers: ["安全"] }, target: { answers: ["当前"] } } }]]);
   });
 
   it("submits MCP form data and supports decline and cancel", async () => {
@@ -138,7 +150,7 @@ describe("ApprovalCenter request lifecycle UI", () => {
     ]);
   });
 
-  it("requires explicit confirmation for a single MCP enum option", async () => {
+  it("submits a single MCP enum option immediately", async () => {
     const elicitation = request(33, "mcpServer/elicitation/request", "pane-1", {
       mode: "form",
       requestedSchema: {
@@ -148,11 +160,9 @@ describe("ApprovalCenter request lifecycle UI", () => {
       }
     });
     const wrapper = mountCenter([elicitation]);
-    expect(wrapper.text()).toContain("提交");
+    expect(wrapper.text()).not.toContain("提交");
     expect(wrapper.text()).toContain("拒绝");
     await clickButton(wrapper, "测试");
-    expect(wrapper.emitted("resolve")).toBeUndefined();
-    await clickButton(wrapper, "提交");
     expect(wrapper.emitted("resolve")).toEqual([[elicitation, { action: "accept", content: { environment: "测试" }, _meta: null }]]);
   });
 

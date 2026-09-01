@@ -8,6 +8,7 @@ export const MAX_REMOTE_TEXT_LENGTH = 20_000;
 
 const idSchema = z.string().min(1).max(200);
 const requestIdSchema = z.string().uuid();
+const approvalChoiceValueSchema = z.union([z.string().max(2_000), z.number().finite(), z.boolean()]);
 
 export const mobileCommandSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("snapshot.get"), requestId: requestIdSchema }),
@@ -15,12 +16,14 @@ export const mobileCommandSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("thread.open"), requestId: requestIdSchema, threadId: idSchema }),
   z.object({ type: z.literal("thread.new"), requestId: requestIdSchema }),
   z.object({ type: z.literal("turn.send"), requestId: requestIdSchema, text: z.string().trim().min(1).max(MAX_REMOTE_TEXT_LENGTH) }),
+  z.object({ type: z.literal("remote.disable"), requestId: requestIdSchema }),
   z.object({
     type: z.literal("approval.resolve"),
     requestId: requestIdSchema,
     approvalId: idSchema,
     version: z.number().int().positive(),
-    decision: z.enum(["accept", "decline"])
+    decision: z.enum(["accept", "decline"]),
+    selection: approvalChoiceValueSchema.optional()
   })
 ]);
 
@@ -30,7 +33,8 @@ export const mobileApprovalSchema = z.object({
   title: z.string().max(200),
   summary: z.string().max(4_000),
   version: z.number().int().positive(),
-  decisions: z.array(z.enum(["accept", "decline"])).length(2)
+  decisions: z.array(z.enum(["accept", "decline"])).length(2),
+  choices: z.array(z.object({ label: z.string().min(1).max(500), value: approvalChoiceValueSchema })).min(1).max(50).optional()
 });
 
 export const mobileItemSchema = z.discriminatedUnion("kind", [
@@ -53,6 +57,7 @@ export const mobileSnapshotSchema = z.object({
   deviceOnline: z.boolean(),
   codexState: z.enum(["ready", "starting", "error", "stopped"]),
   codexMessage: z.string().max(1_000),
+  appearance: z.object({ theme: z.enum(["system", "dark", "light"]), accentColor: z.string().regex(/^#[0-9a-f]{6}$/i) }),
   activeThreadId: idSchema.nullable(),
   activeThreadTitle: z.string().max(200),
   turnStatus: z.enum(["idle", "running", "waiting", "failed"]),

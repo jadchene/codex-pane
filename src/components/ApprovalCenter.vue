@@ -146,7 +146,17 @@ const submitAnswers = (): void => {
 const chooseAnswer = (question: Record<string, unknown>, value: string): void => {
   const id = String(question.id ?? "");
   answers[id] = value;
+  formError.value = "";
+  const ready = value !== "__other__" && questions.value.every((candidate) => {
+    const candidateId = String(candidate.id ?? "");
+    return Array.isArray(candidate.options) && Boolean(answers[candidateId]) && answers[candidateId] !== "__other__";
+  });
+  if (ready) submitAnswers();
 };
+const showAnswerSubmit = computed(() => questions.value.some((question) => {
+  const id = String(question.id ?? "");
+  return !Array.isArray(question.options) || answers[id] === "__other__";
+}));
 
 const acceptPermissions = (scope: "turn" | "session"): void => {
   if (!activeRequest.value) return;
@@ -233,8 +243,12 @@ const fieldSelectValue = (name: string): string | string[] | null => {
 };
 const fieldStringValue = (name: string): string => typeof elicitationValues[name] === "string" ? elicitationValues[name] : "";
 const updateField = (name: string, value: unknown): void => { elicitationValues[name] = value; };
-const chooseElicitationOption = (field: { name: string }, value: string): void => {
+const selectionOnlyElicitation = computed(() => params.value.mode === "form" && elicitationFields.value.length === 1
+  && elicitationFields.value[0]!.schema.type !== "array" && fieldOptions(elicitationFields.value[0]!.schema).length > 0);
+const chooseElicitationOption = (field: { name: string; schema: Record<string, unknown> }, value: string): void => {
   updateField(field.name, value);
+  formError.value = "";
+  if (selectionOnlyElicitation.value) submitElicitation("accept");
 };
 
 const handleKeydown = (event: KeyboardEvent): void => {
@@ -338,7 +352,7 @@ const openElicitationUrl = async (): Promise<void> => {
               </NFormItem>
             </NForm>
             <NAlert v-if="formError" type="error">{{ formError }}</NAlert>
-            <div class="approval-actions"><NButton type="primary" @click="submitAnswers">提交回答</NButton></div>
+            <div v-if="showAnswerSubmit" class="approval-actions"><NButton type="primary" @click="submitAnswers">提交回答</NButton></div>
           </template>
 
           <template v-else-if="activeRequest.method === 'mcpServer/elicitation/request'">
@@ -359,7 +373,7 @@ const openElicitationUrl = async (): Promise<void> => {
             </NFormItem>
             <NAlert v-if="formError" type="error">{{ formError }}</NAlert>
             <NSpace class="approval-actions">
-              <NButton type="primary" @click="submitElicitation('accept')">{{ params.mode === 'url' ? '已完成，继续' : '提交' }}</NButton>
+              <NButton v-if="params.mode === 'url' || !selectionOnlyElicitation" type="primary" @click="submitElicitation('accept')">{{ params.mode === 'url' ? '已完成，继续' : '提交' }}</NButton>
               <NButton type="error" secondary @click="submitElicitation('decline')">拒绝</NButton>
               <NButton @click="submitElicitation('cancel')">取消</NButton>
             </NSpace>

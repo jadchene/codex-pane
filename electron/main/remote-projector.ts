@@ -87,6 +87,7 @@ export class RemoteProjector {
   #activeThreadId: string | null = null;
   #activeThreadTitle = "未选择会话";
   #activeCwd = "";
+  #appearance: MobileSnapshot["appearance"] = { theme: "system", accentColor: "#10a37f" };
   #turnStatus: MobileSnapshot["turnStatus"] = "idle";
   #activeTurnId: string | null = null;
 
@@ -95,6 +96,10 @@ export class RemoteProjector {
 
   setConnection(state: ConnectionState): void {
     this.#connection = state;
+  }
+
+  setAppearance(appearance: MobileSnapshot["appearance"]): void {
+    this.#appearance = appearance;
   }
 
   setThreads(rawThreads: unknown[]): ThreadSummary[] {
@@ -189,6 +194,7 @@ export class RemoteProjector {
       deviceOnline: true,
       codexState: phase,
       codexMessage: safeText(this.#connection.message, 1_000),
+      appearance: this.#appearance,
       activeThreadId: this.#activeThreadId,
       activeThreadTitle: this.#activeThreadTitle,
       turnStatus: this.#turnStatus,

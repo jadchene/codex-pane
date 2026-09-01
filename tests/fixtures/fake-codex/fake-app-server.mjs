@@ -30,6 +30,22 @@ const sendApproval = (threadId = "fixture-thread") => {
   });
 };
 
+const sendMcpApproval = (threadId = "fixture-thread") => {
+  write({
+    id: "mcp-approval-fixture-1",
+    method: "mcpServer/elicitation/request",
+    params: {
+      threadId,
+      turnId: "fixture-turn",
+      serverName: "fixture-mcp",
+      mode: "form",
+      message: "选择部署环境",
+      requestedSchema: { type: "object", properties: { environment: { type: "string", title: "部署环境", enum: ["测试", "生产"] } }, required: ["environment"] },
+      _meta: { source: "fixture" }
+    }
+  });
+};
+
 const resultFor = (method, params = {}) => {
   if (method === "initialize") return {
     userAgent: "codex-pane-fixture/0.149.1",
@@ -80,6 +96,12 @@ input.on("line", (line) => {
   if (message.id === "approval-fixture-1" && message.method === undefined) {
     appendFileSync(process.env.CODEX_PANE_APPROVAL_RESPONSE_LOG || resolve("test-results", "approval-response.jsonl"), `${JSON.stringify(message)}\n`, "utf8");
     write({ method: "serverRequest/resolved", params: { requestId: "approval-fixture-1" } });
+    if (process.env.CODEX_PANE_MCP_APPROVAL_AFTER_COMMAND === "1") setTimeout(() => sendMcpApproval("fixture-thread-a"), 50);
+    return;
+  }
+  if (message.id === "mcp-approval-fixture-1" && message.method === undefined) {
+    appendFileSync(process.env.CODEX_PANE_APPROVAL_RESPONSE_LOG || resolve("test-results", "approval-response.jsonl"), `${JSON.stringify(message)}\n`, "utf8");
+    write({ method: "serverRequest/resolved", params: { requestId: "mcp-approval-fixture-1" } });
     return;
   }
   if (message.id !== undefined && message.method) {
@@ -88,6 +110,9 @@ input.on("line", (line) => {
       return;
     }
     write({ id: message.id, result: resultFor(message.method, message.params) });
+    if (message.method === "thread/resume" && message.params?.threadId === "fixture-thread-b" && process.env.CODEX_PANE_DESKTOP_TURN_ON_THREAD_B === "1") {
+      setTimeout(() => write({ method: "turn/started", params: { threadId: "fixture-thread-b", turn: { id: "fixture-desktop-turn", status: "inProgress" } } }), 50);
+    }
     if (message.method === "turn/start" && process.env.CODEX_PANE_APPROVAL_ON_TURN_START === "1" && !approvalSent) {
       setTimeout(() => sendApproval(message.params?.threadId || "fixture-thread"), 50);
     }

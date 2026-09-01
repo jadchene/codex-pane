@@ -34,15 +34,32 @@ describe("desktop package hardening", () => {
   });
 
   it("loads the signed mobile UI through a Safari-compatible isolated document", async () => {
-    const [bootstrap, bundler, viteConfig] = await Promise.all([
+    const [bootstrap, bootstrapSource, bootstrapHtml, bootstrapCss, desktopIcon, mobileIcon, mobileApp, mobileCss, bundler, viteConfig] = await Promise.all([
       readFile(resolve("remote/relay/public/bootstrap.js"), "utf8"),
+      readFile(resolve("remote/relay/src/mobile-bootstrap.js"), "utf8"),
+      readFile(resolve("remote/relay/public/index.html"), "utf8"),
+      readFile(resolve("remote/relay/public/bootstrap.css"), "utf8"),
+      readFile(resolve("assets/icon.svg"), "utf8"),
+      readFile(resolve("remote/relay/public/icon.svg"), "utf8"),
+      readFile(resolve("remote/mobile/src/App.vue"), "utf8"),
+      readFile(resolve("remote/mobile/src/styles.css"), "utf8"),
       readFile(resolve("remote/mobile/scripts/bundle.mjs"), "utf8"),
       readFile(resolve("remote/mobile/vite.config.ts"), "utf8")
     ]);
-    expect(bootstrap).toContain("mountedFrame.srcdoc = html");
-    expect(bootstrap).toContain('mountedFrame.sandbox = "allow-scripts allow-forms allow-popups"');
-    expect(bootstrap).not.toContain("URL.createObjectURL(new Blob");
-    expect(bootstrap).not.toContain("allow-same-origin");
+    expect(bootstrapSource).toContain("mountedFrame.srcdoc = html");
+    expect(bootstrapSource).toContain('mountedFrame.sandbox = "allow-scripts allow-forms allow-popups"');
+    expect(bootstrapSource).not.toContain("URL.createObjectURL(new Blob");
+    expect(bootstrapSource).not.toContain("allow-same-origin");
+    expect(bootstrapSource).toContain('setStatus("验证身份后即可连接桌面端")');
+    expect(bootstrapSource).not.toContain('setStatus("请使用 Passkey 登录")');
+    expect(bootstrap.length).toBeLessThan(bootstrapSource.length * 0.7);
+    expect(bootstrap).not.toContain("mountedFrame");
+    expect(bootstrap).not.toContain("sourceMappingURL");
+    expect(bootstrapHtml).toContain('<img class="mark" src="./icon.svg"');
+    expect(mobileIcon.replaceAll("\r\n", "\n")).toBe(desktopIcon.replaceAll("\r\n", "\n"));
+    expect(bootstrapCss).toContain("@media (prefers-color-scheme: light)");
+    expect(mobileApp).toContain('window.matchMedia("(prefers-color-scheme: dark)")');
+    expect(mobileCss).toContain("--bg: #f3f5f7");
     expect(bundler).toContain("Mobile bundle must be a classic self-contained script");
     expect(viteConfig).toContain('format: "iife"');
   });

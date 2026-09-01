@@ -544,6 +544,7 @@ const registerIpc = (): void => {
     await stateStore.save(protectRemoteUrls(workspace));
     const focusedPane = workspace.panes.find((pane) => pane.id === workspace.focusedPaneId) ?? workspace.panes[0];
     remoteBridge.updateSessionDefaults({ cwd: workspace.defaultCwd || null, model: focusedPane?.model ?? null });
+    remoteBridge.updateAppearance({ theme: workspace.appearance.theme, accentColor: workspace.appearance.accentColor });
   });
   ipcMain.handle("window:fullscreen", (event, fullScreen: unknown) => {
     assertTrustedSender(event);
@@ -693,6 +694,7 @@ app.whenReady().then(async () => {
   remoteBridgeLease = new ProcessOwnershipLease(join(dataDirectory, "remote", ".bridge-owner"));
   const initialRemotePane = persistedWorkspace?.panes.find((pane) => pane.id === persistedWorkspace.focusedPaneId) ?? persistedWorkspace?.panes[0];
   remoteBridge.updateSessionDefaults({ cwd: persistedWorkspace?.defaultCwd || null, model: initialRemotePane?.model ?? null });
+  remoteBridge.updateAppearance({ theme: persistedWorkspace?.appearance.theme ?? "system", accentColor: persistedWorkspace?.appearance.accentColor ?? "#10a37f" });
   remoteBridge.on("status", (status) => mainWindow?.webContents.send("remote:status-changed", status));
   await remoteBridge.initialize(remoteBridgeLease.acquire());
   protocol.handle("codex-media", async (request) => {

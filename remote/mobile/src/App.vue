@@ -1,14 +1,25 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from "vue";
-import { darkTheme, NAlert, NButton, NConfigProvider, NInput, NSpin } from "naive-ui";
+import { darkTheme, NAlert, NButton, NConfigProvider, NInput, NPopconfirm, NSpin } from "naive-ui";
 import DOMPurify from "dompurify";
 import { marked } from "marked";
 import type { DesktopEvent, MobileCommand, MobileItem, MobileSnapshot } from "@codex-pane/remote-protocol";
 import { RemoteClient } from "./remote-client";
 import { isNearConversationBottom } from "./scroll";
 
-const emptySnapshot = (): MobileSnapshot => ({ deviceOnline: false, codexState: "stopped", codexMessage: "桌面未连接", activeThreadId: null, activeThreadTitle: "Codex Pane", turnStatus: "idle", threads: [], items: [] });
+const darkMedia = window.matchMedia("(prefers-color-scheme: dark)");
+const prefersDark = ref(darkMedia.matches);
+const emptySnapshot = (): MobileSnapshot => ({ deviceOnline: false, codexState: "stopped", codexMessage: "桌面未连接", appearance: { theme: "system", accentColor: "#10a37f" }, activeThreadId: null, activeThreadTitle: "Codex Pane", turnStatus: "idle", threads: [], items: [] });
 const snapshot = ref(emptySnapshot());
+const resolvedTheme = computed<"dark" | "light">(() => snapshot.value.appearance.theme === "system" ? prefersDark.value ? "dark" : "light" : snapshot.value.appearance.theme);
+const activeTheme = computed(() => resolvedTheme.value === "dark" ? darkTheme : null);
+const themeOverrides = computed(() => ({ common: {
+  primaryColor: snapshot.value.appearance.accentColor,
+  primaryColorHover: snapshot.value.appearance.accentColor,
+  primaryColorPressed: snapshot.value.appearance.accentColor,
+  primaryColorSuppl: snapshot.value.appearance.accentColor
+} }));
+const appearanceStyle = computed(() => ({ "--accent": snapshot.value.appearance.accentColor }));
 const error = ref("");
 const connectionState = ref<"connecting" | "connected" | "disconnected">("disconnected");
 const sessionMenuOpen = ref(false);
@@ -27,6 +38,7 @@ const markdownCache = new Map<string, { source: string; html: string }>();
 
 const sending = computed(() => [...pendingCommands.values()].includes("turn.send"));
 const threadBusy = computed(() => [...pendingCommands.values()].some((type) => type === "thread.new" || type === "thread.open"));
+const disablingRemote = computed(() => [...pendingCommands.values()].includes("remote.disable"));
 const desktopReady = computed(() => connectionState.value === "connected" && snapshot.value.deviceOnline && snapshot.value.codexState === "ready");
 const canSend = computed(() => desktopReady.value && Boolean(snapshot.value.activeThreadId) && draft.value.trim().length > 0 && !sending.value);
 const statusClass = computed(() => desktopReady.value ? "online" : "offline");
@@ -166,13 +178,19 @@ const closeSessionMenu = async (): Promise<void> => {
 };
 const toggleSessionMenu = (): void => { if (sessionMenuOpen.value) void closeSessionMenu(); else void openSessionMenu(); };
 const handleKeydown = (event: KeyboardEvent): void => { if (event.key === "Escape" && sessionMenuOpen.value) void closeSessionMenu(); };
-const resolveApproval = (item: Extract<MobileItem, { kind: "approval" }>, decision: "accept" | "decline"): void => {
+const handleThemeChange = (event: MediaQueryListEvent): void => { prefersDark.value = event.matches; };
+const disableRemoteAccess = (): void => {
+  if (disablingRemote.value) return;
+  try { sendCommand({ type: "remote.disable", requestId: crypto.randomUUID() }); }
+  catch (reason) { error.value = reason instanceof Error ? reason.message : String(reason); }
+};
+const resolveApproval = (item: Extract<MobileItem, { kind: "approval" }>, decision: "accept" | "decline", selection?: string | number | boolean): void => {
   if (resolvingApprovals.has(item.id)) return;
   const requestId = crypto.randomUUID();
   resolvingApprovals.add(item.id);
   approvalResolutions.set(requestId, item);
   snapshot.value.items = snapshot.value.items.filter((candidate) => candidate.id !== item.id);
-  try { sendCommand({ type: "approval.resolve", requestId, approvalId: item.id, version: item.version, decision }); }
+  try { sendCommand({ type: "approval.resolve", requestId, approvalId: item.id, version: item.version, decision, ...(selection === undefined ? {} : { selection }) }); }
   catch (reason) {
     resolvingApprovals.delete(item.id);
     approvalResolutions.delete(requestId);
@@ -180,14 +198,14 @@ const resolveApproval = (item: Extract<MobileItem, { kind: "approval" }>, decisi
     error.value = reason instanceof Error ? reason.message : String(reason);
   }
 };
-onMounted(() => { window.addEventListener("keydown", handleKeydown); connect(); });
-onBeforeUnmount(() => { window.removeEventListener("keydown", handleKeydown); client?.stop(); });
+onMounted(() => { window.addEventListener("keydown", handleKeydown); darkMedia.addEventListener("change", handleThemeChange); connect(); });
+onBeforeUnmount(() => { window.removeEventListener("keydown", handleKeydown); darkMedia.removeEventListener("change", handleThemeChange); client?.stop(); });
 </script>
 
 <template>
-  <NConfigProvider :theme="darkTheme">
-  <main class="app-shell">
-    <header><div class="header-title"><h1>{{ snapshot.activeThreadTitle }}</h1><p><span class="status-dot" :class="statusClass" />{{ statusLabel }}</p></div><div class="session-menu"><button ref="sessionButton" class="session-button" aria-label="打开会话列表" :aria-expanded="sessionMenuOpen" @click="toggleSessionMenu">会话</button><button v-if="sessionMenuOpen" class="drawer-backdrop" tabindex="-1" aria-hidden="true" @click="closeSessionMenu" /><aside v-if="sessionMenuOpen" aria-label="最近会话"><div class="drawer-header"><strong>最近会话</strong><button ref="drawerCloseButton" aria-label="关闭会话列表" @click="closeSessionMenu">×</button></div><div class="drawer-body"><div v-if="!snapshot.threads.length" class="drawer-empty">暂无会话</div><button v-for="thread in snapshot.threads" :key="thread.id" class="thread-row" :class="{ active: thread.id === snapshot.activeThreadId }" :disabled="threadBusy" @click="openThread(thread.id)"><strong>{{ thread.title }}</strong><span>{{ thread.preview }}</span></button></div><div class="drawer-actions"><NButton type="primary" block :disabled="!desktopReady || threadBusy" :loading="threadBusy" @click="newThread(); sessionMenuOpen = false">新建会话</NButton></div></aside></div></header>
+  <NConfigProvider :theme="activeTheme" :theme-overrides="themeOverrides">
+  <main class="app-shell" :class="`theme-${resolvedTheme}`" :style="appearanceStyle">
+    <header><div class="header-title"><h1>{{ snapshot.activeThreadTitle }}</h1><p><span class="status-dot" :class="statusClass" />{{ statusLabel }}</p></div><div class="session-menu"><button ref="sessionButton" class="session-button" aria-label="打开会话列表" :aria-expanded="sessionMenuOpen" @click="toggleSessionMenu">会话</button><button v-if="sessionMenuOpen" class="drawer-backdrop" tabindex="-1" aria-hidden="true" @click="closeSessionMenu" /><aside v-if="sessionMenuOpen" aria-label="最近会话"><div class="drawer-header"><strong>最近会话</strong><button ref="drawerCloseButton" aria-label="关闭会话列表" @click="closeSessionMenu">×</button></div><div class="drawer-body"><div v-if="!snapshot.threads.length" class="drawer-empty">暂无会话</div><button v-for="thread in snapshot.threads" :key="thread.id" class="thread-row" :class="{ active: thread.id === snapshot.activeThreadId }" :disabled="threadBusy" @click="openThread(thread.id)"><strong>{{ thread.title }}</strong><span>{{ thread.preview }}</span></button></div><div class="drawer-actions"><NButton type="primary" block :disabled="!desktopReady || threadBusy" :loading="threadBusy" @click="newThread(); sessionMenuOpen = false">新建会话</NButton><NPopconfirm positive-text="关闭" negative-text="取消" :disabled="disablingRemote" @positive-click="disableRemoteAccess"><template #trigger><NButton type="error" secondary block :loading="disablingRemote">关闭远程访问</NButton></template>关闭后，所有手机都会立即断开。可在桌面端重新启用。</NPopconfirm></div></aside></div></header>
     <NAlert v-if="error" class="connection-alert" closable type="warning" @close="error = ''">{{ error }}</NAlert>
     <section ref="scrollContainer" class="conversation" @scroll="handleScroll">
       <div v-if="!snapshot.activeThreadId" class="empty-state"><h2>选择一个会话</h2><p>可以继续最近的会话，也可以新建会话。</p></div>
@@ -195,13 +213,13 @@ onBeforeUnmount(() => { window.removeEventListener("keydown", handleKeydown); cl
         <div v-if="item.kind === 'user'" class="bubble">{{ item.text }}</div>
         <div v-else-if="item.kind === 'agent'" class="markdown" v-html="markdown(item.id, item.markdown)" />
         <details v-else-if="item.kind === 'activity'" class="activity-card"><summary><span>{{ item.title }}</span><small>{{ item.status === 'running' ? '进行中' : item.status === 'failed' ? '失败' : '完成' }}</small></summary><p>{{ item.summary }}</p><pre v-if="item.detail">{{ item.detail }}</pre></details>
-        <section v-else class="approval-card"><strong>{{ item.title }}</strong><p>{{ item.summary }}</p><div><NButton :disabled="resolvingApprovals.has(item.id)" @click="resolveApproval(item, 'decline')">拒绝</NButton><NButton type="primary" :loading="resolvingApprovals.has(item.id)" @click="resolveApproval(item, 'accept')">仅本次同意</NButton></div></section>
+        <section v-else class="approval-card"><strong>{{ item.title }}</strong><p>{{ item.summary }}</p><div class="approval-actions"><NButton :disabled="resolvingApprovals.has(item.id)" @click="resolveApproval(item, 'decline')">拒绝</NButton><template v-if="item.choices"><NButton v-for="choice in item.choices" :key="`${typeof choice.value}:${String(choice.value)}`" type="primary" :loading="resolvingApprovals.has(item.id)" @click="resolveApproval(item, 'accept', choice.value)">{{ choice.label }}</NButton></template><NButton v-else type="primary" :loading="resolvingApprovals.has(item.id)" @click="resolveApproval(item, 'accept')">仅本次同意</NButton></div></section>
       </article>
       <NSpin v-if="snapshot.turnStatus === 'running'" size="small"><span class="running-label">Codex 正在处理…</span></NSpin>
       <div class="bottom-spacer" />
     </section>
     <button v-if="!followTail" class="latest-button" @click="scrollLatest">回到最新<span v-if="unread"> · {{ unread }}</span></button>
-    <footer><div class="footer-actions"><NButton size="small" secondary :disabled="!desktopReady || threadBusy" @click="newThread">新会话</NButton><NButton size="small" secondary @click="openSessionMenu">切换会话</NButton></div><div class="composer"><NInput v-model:value="draft" type="textarea" :autosize="{ minRows: 1, maxRows: 5 }" maxlength="20000" placeholder="输入消息…" @keydown.ctrl.enter.prevent="send" @keydown.meta.enter.prevent="send" /><NButton type="primary" :disabled="!canSend" :loading="sending" @click="send">{{ snapshot.turnStatus === 'running' ? '追加' : '发送' }}</NButton></div></footer>
+    <footer><div class="composer"><NInput v-model:value="draft" type="textarea" :autosize="{ minRows: 1, maxRows: 5 }" maxlength="20000" placeholder="输入消息…" @keydown.ctrl.enter.prevent="send" @keydown.meta.enter.prevent="send" /><NButton type="primary" :disabled="!canSend" :loading="sending" @click="send">{{ snapshot.turnStatus === 'running' ? '追加' : '发送' }}</NButton></div></footer>
   </main>
   </NConfigProvider>
 </template>

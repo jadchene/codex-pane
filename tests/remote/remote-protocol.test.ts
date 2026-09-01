@@ -2,11 +2,13 @@ import { describe, expect, it } from "vitest";
 import { MAX_REMOTE_MESSAGE_BYTES, createEnvelope, mobileCommandSchema, parseEnvelopeText, routeEnvelopeSchema } from "../../packages/remote-protocol/src/index";
 
 describe("remote protocol", () => {
-  it("accepts only the six product commands", () => {
+  it("accepts only the supported product commands", () => {
     const requestId = crypto.randomUUID();
     expect(mobileCommandSchema.parse({ type: "snapshot.get", requestId }).type).toBe("snapshot.get");
     expect(() => mobileCommandSchema.parse({ type: "turn.interrupt", requestId, threadId: "thread-1" })).toThrow();
     expect(() => mobileCommandSchema.parse({ type: "turn.send", requestId, text: "/model gpt" })).not.toThrow();
+    expect(() => mobileCommandSchema.parse({ type: "remote.disable", requestId })).not.toThrow();
+    expect(() => mobileCommandSchema.parse({ type: "approval.resolve", requestId, approvalId: "approval-1", version: 1, decision: "accept", selection: "测试" })).not.toThrow();
     expect(() => mobileCommandSchema.parse({ type: "turn.send", requestId, text: "x".repeat(20_001) })).toThrow();
   });
 

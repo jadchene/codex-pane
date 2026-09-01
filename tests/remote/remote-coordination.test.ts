@@ -17,7 +17,7 @@ describe("remote coordination", () => {
     expect(supervisor.call).toHaveBeenCalledWith("thread/unsubscribe", { threadId: "thread-1" });
   });
 
-  it("allows one-time command and URL MCP decisions but rejects structured MCP forms", () => {
+  it("allows one-time command, URL MCP, and simple MCP choice decisions", () => {
     const supervisor = fakeSupervisor();
     const coordinator = new ServerRequestCoordinator(supervisor);
     const command = coordinator.observe(3, 7, "item/commandExecution/requestApproval", { threadId: "thread-1", command: "npm test" });
@@ -25,9 +25,20 @@ describe("remote coordination", () => {
     coordinator.resolve("7", command!.version, "accept");
     expect(supervisor.respondToServer).toHaveBeenCalledWith(3, 7, { decision: "accept" });
     expect(() => coordinator.resolve("7", command!.version, "decline")).toThrow("已经过期");
-    expect(coordinator.observe(3, 8, "mcpServer/elicitation/request", { threadId: "thread-1", mode: "form" })).toBeNull();
+    expect(coordinator.observe(3, 8, "mcpServer/elicitation/request", { threadId: "thread-1", mode: "form", requestedSchema: { type: "object", properties: { project: { type: "string" } } } })).toBeNull();
     const urlMcp = coordinator.observe(3, 9, "mcpServer/elicitation/request", { threadId: "thread-1", mode: "url" });
     coordinator.resolve("9", urlMcp!.version, "decline");
     expect(supervisor.respondToServer).toHaveBeenLastCalledWith(3, 9, { action: "decline", content: null, _meta: null });
+
+    const choiceMcp = coordinator.observe(3, 10, "mcpServer/elicitation/request", {
+      threadId: "thread-1",
+      mode: "form",
+      requestedSchema: { type: "object", properties: { environment: { type: "string", enum: ["测试", "生产"] } } },
+      _meta: { source: "test" }
+    });
+    expect(choiceMcp?.choice?.values).toEqual([{ label: "测试", value: "测试" }, { label: "生产", value: "生产" }]);
+    expect(() => coordinator.resolve("10", choiceMcp!.version, "accept")).toThrow("请选择");
+    coordinator.resolve("10", choiceMcp!.version, "accept", "测试");
+    expect(supervisor.respondToServer).toHaveBeenLastCalledWith(3, 10, { action: "accept", content: { environment: "测试" }, _meta: { source: "test" } });
   });
 });

@@ -14,6 +14,8 @@ const isolatedEnv = (requestLog: string, approvalResponseLog: string): Record<st
   CODEX_PANE_USER_DATA_DIR: resolve("test-results", `remote-user-data-${randomUUID()}`),
   CODEX_PANE_REQUEST_LOG: requestLog,
   CODEX_PANE_APPROVAL_ON_TURN_START: "1",
+  CODEX_PANE_MCP_APPROVAL_AFTER_COMMAND: "1",
+  CODEX_PANE_DESKTOP_TURN_ON_THREAD_B: "1",
   CODEX_PANE_APPROVAL_RESPONSE_LOG: approvalResponseLog,
   CODEX_PANE_DISABLE_HARDWARE_ACCELERATION: "1"
 });
@@ -135,6 +137,7 @@ test("completes the real thin-relay pairing, Passkey, E2EE, UI delivery, and con
     const settings = desktop.getByRole("dialog").filter({ hasText: "远程访问" });
     await settings.waitFor({ state: "visible" });
     await desktop.waitForTimeout(250);
+    await settings.locator(".n-radio-button").filter({ hasText: "浅色" }).click();
     await attachScreenshot(testInfo, "remote-settings-initial", desktop);
     await settings.locator(".n-form-item").filter({ hasText: "启用远程访问" }).getByRole("switch").click();
     await settings.getByPlaceholder("https://pane.example.com").fill(relayOrigin);
@@ -154,6 +157,9 @@ test("completes the real thin-relay pairing, Passkey, E2EE, UI delivery, and con
     }))).resolves.toBe("Access denied");
 
     mobile = await openMobileWindow(application, pairingStatus.pairing.url);
+    await mobile.emulateMedia({ colorScheme: "light" });
+    await expect(mobile.locator(".mark")).toHaveAttribute("src", "./icon.svg");
+    expect(await mobile.locator("body").evaluate((element) => getComputedStyle(element).backgroundColor)).toBe("rgb(243, 245, 247)");
     const cdp = await application.context().newCDPSession(mobile);
     await cdp.send("WebAuthn.enable");
     const authenticator = await cdp.send("WebAuthn.addVirtualAuthenticator", {
@@ -181,7 +187,10 @@ test("completes the real thin-relay pairing, Passkey, E2EE, UI delivery, and con
     const frame = mobile.frameLocator("#mobile-frame");
     const sessionMenu = frame.getByRole("button", { name: "打开会话列表" });
     await expect(sessionMenu).toBeVisible({ timeout: 20_000 });
-    await expect(frame.getByRole("button", { name: "新会话", exact: true })).toBeEnabled();
+    await expect(frame.getByRole("button", { name: "新会话", exact: true })).toHaveCount(0);
+    await expect(frame.getByRole("button", { name: "切换会话", exact: true })).toHaveCount(0);
+    await expect(frame.locator(".app-shell")).toHaveClass(/theme-light/);
+    expect(await frame.locator(".app-shell").evaluate((element) => getComputedStyle(element).backgroundColor)).toBe("rgb(243, 245, 247)");
     expect(await mobile.evaluate(() => window.innerWidth)).toBeLessThanOrEqual(420);
     const mobileLayout = await frame.locator(".app-shell").evaluate((element) => {
       const bounds = element.getBoundingClientRect();
@@ -228,11 +237,17 @@ test("completes the real thin-relay pairing, Passkey, E2EE, UI delivery, and con
     expect((await frame.locator(".connection-alert").boundingBox())?.y ?? 999).toBeLessThan(180);
     await attachScreenshot(testInfo, "mobile-visible-command-error", mobile);
     await frame.locator(".connection-alert .n-base-close").click();
-    await frame.getByRole("button", { name: "新会话", exact: true }).click();
+    await sessionMenu.click();
+    await frame.getByRole("button", { name: "新建会话", exact: true }).click();
     await expect.poll(async () => (await readFile(requestLog, "utf8")).includes('"method":"thread/start"')).toBe(true);
+    await expect.poll(async () => {
+      const requests = (await readFile(requestLog, "utf8")).trim().split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line) as { method: string; params: Record<string, unknown> });
+      return requests.some((request) => request.method === "thread/start" && request.params.approvalPolicy === "on-request" && request.params.approvalsReviewer === "user" && request.params.permissions === ":workspace");
+    }).toBe(true);
     await expect(frame.getByRole("heading", { name: "手机新会话" })).toBeVisible();
     await sessionMenu.click();
     await expect(frame.getByRole("complementary", { name: "最近会话" })).toBeVisible();
+    await expect(frame.getByRole("button", { name: "关闭远程访问" })).toBeVisible();
     await expect(frame.locator(".drawer-backdrop")).toBeVisible();
     await attachScreenshot(testInfo, "mobile-session-drawer", mobile);
     await frame.locator(".drawer-header").getByRole("button", { name: "关闭会话列表" }).click();
@@ -241,6 +256,17 @@ test("completes the real thin-relay pairing, Passkey, E2EE, UI delivery, and con
     await sessionMenu.click();
     await expect.poll(async () => (await readFile(requestLog, "utf8")).includes('"method":"thread/list"')).toBe(true);
     await expect.poll(() => frame.locator("body").textContent()).toContain("示例会话 A");
+    await frame.getByRole("button", { name: /示例会话 B/ }).click();
+    await expect(frame.getByRole("button", { name: "追加", exact: true })).toBeVisible();
+    await frame.getByPlaceholder("输入消息…").fill("不能追加到桌面任务");
+    await frame.getByRole("button", { name: "追加", exact: true }).click();
+    await expect(frame.getByText("当前任务正在桌面端运行，完成后再发送。", { exact: true })).toBeVisible();
+    await expect.poll(async () => {
+      const requests = (await readFile(requestLog, "utf8")).trim().split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line) as { method: string; params: Record<string, unknown> });
+      return requests.some((request) => request.method === "turn/steer" && request.params.threadId === "fixture-thread-b");
+    }).toBe(false);
+    await frame.locator(".connection-alert .n-base-close").click();
+    await sessionMenu.click();
     await frame.getByRole("button", { name: /示例会话 A/ }).click();
     await expect(frame.getByRole("heading", { name: "示例会话 A" })).toBeVisible();
     await expect(frame.getByText("已通过兼容分页加载历史", { exact: true })).toBeVisible();
@@ -254,7 +280,7 @@ test("completes the real thin-relay pairing, Passkey, E2EE, UI delivery, and con
 
     await expect.poll(async () => {
       const lines = (await readFile(requestLog, "utf8")).trim().split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line) as { method: string; params: Record<string, unknown> });
-      return lines.some((line) => line.method === "turn/start" && line.params.threadId === "fixture-thread-a");
+      return lines.some((line) => line.method === "turn/start" && line.params.threadId === "fixture-thread-a" && line.params.approvalPolicy === "on-request" && line.params.approvalsReviewer === "user" && line.params.permissions === ":workspace");
     }).toBe(true);
 
     const mobileApproval = frame.locator(".approval-card").filter({ hasText: "验证完整审批链路" });
@@ -267,6 +293,14 @@ test("completes the real thin-relay pairing, Passkey, E2EE, UI delivery, and con
     await expect(mobileApproval).toBeHidden();
     await expect.poll(async () => (await readFile(approvalResponseLog, "utf8")).trim()).toContain('"decision":"accept"');
     await expect(desktop.getByText("命令需要确认", { exact: true })).toHaveCount(0);
+
+    const mcpApproval = frame.locator(".approval-card").filter({ hasText: "选择部署环境" });
+    await expect(mcpApproval).toBeVisible({ timeout: 10_000 });
+    await expect(mcpApproval.getByRole("button", { name: "测试", exact: true })).toBeEnabled();
+    await expect(mcpApproval.getByRole("button", { name: "生产", exact: true })).toBeEnabled();
+    await expect(mcpApproval.getByRole("button", { name: "仅本次同意" })).toHaveCount(0);
+    await mcpApproval.getByRole("button", { name: "测试", exact: true }).click();
+    await expect.poll(async () => (await readFile(approvalResponseLog, "utf8")).trim()).toContain('"action":"accept","content":{"environment":"测试"}');
 
     await settings.getByRole("button", { name: "添加手机" }).click();
     const secondPairingStatus = await desktop.evaluate(() => window.codexPane.getRemoteAccessStatus());
@@ -301,6 +335,16 @@ test("completes the real thin-relay pairing, Passkey, E2EE, UI delivery, and con
     await desktop.evaluate((credentialId) => window.codexPane.revokeRemotePasskey(credentialId), secondCredentialId);
     await expect(secondMobile.getByText("这部手机的绑定已失效，请在桌面端重新生成二维码。", { exact: true })).toBeVisible({ timeout: 10_000 });
     await expect(frame.getByRole("button", { name: "打开会话列表" })).toBeVisible();
+
+    await frame.getByRole("button", { name: "打开会话列表" }).click();
+    await frame.getByRole("button", { name: "关闭远程访问" }).click();
+    await frame.getByRole("button", { name: "关闭", exact: true }).click();
+    await expect.poll(async () => (await desktop.evaluate(() => window.codexPane.getRemoteAccessStatus())).phase).toBe("disabled");
+    await desktop.evaluate((url) => window.codexPane.updateRemoteSettings({ enabled: true, relayUrl: url }), relayOrigin);
+    await expect.poll(async () => (await desktop.evaluate(() => window.codexPane.getRemoteAccessStatus())).phase).toBe("connected");
+    await mobile.reload();
+    await mobile.getByRole("button", { name: "使用 Passkey 登录" }).click();
+    await expect(mobile.frameLocator("#mobile-frame").getByRole("button", { name: "打开会话列表" })).toBeVisible({ timeout: 15_000 });
 
     const standbyApplication = await electron.launch({ args: ["--no-sandbox", "--disable-gpu", "--in-process-gpu", "--use-angle=swiftshader", "--use-gl=angle", resolve(".")], env: desktopEnvironment });
     applications.push(standbyApplication);

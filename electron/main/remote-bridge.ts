@@ -33,6 +33,7 @@ import { loadRemoteThread } from "./remote-history.js";
 const record = (value: unknown): Record<string, unknown> => value && typeof value === "object" ? value as Record<string, unknown> : {};
 const text = (value: unknown): string => typeof value === "string" ? value : "";
 const MAX_MOBILE_DOCUMENT_BYTES = 2 * 1024 * 1024;
+const REMOTE_SAFE_SETTINGS = { approvalPolicy: "on-request", approvalsReviewer: "user", permissions: ":workspace" } as const;
 
 type PairingState = {
   pairingId: string;
@@ -74,6 +75,7 @@ export class RemoteBridge extends EventEmitter {
   readonly #subscriptions: ThreadSubscriptionRegistry;
   readonly #requestResults = new Map<string, { at: number; event: DesktopEvent }>();
   readonly #pendingProjected = new Map<string, { threadId: string; item: MobileItem }>();
+  readonly #remoteTurnIds = new Set<string>();
   readonly #peers = new Map<string, PeerState>();
   #projectTimer: NodeJS.Timeout | null = null;
   #credentials: RemoteCredentialState | null = null;
@@ -98,6 +100,11 @@ export class RemoteBridge extends EventEmitter {
 
   get status(): RemoteAccessStatus { return structuredClone(this.#status); }
 
+  updateAppearance(appearance: { theme: "system" | "dark" | "light"; accentColor: string }): void {
+    this.#projector.setAppearance(appearance);
+    if (this.#status.phase === "connected") this.#sendEvent({ type: "snapshot", seq: this.#nextSeq(), snapshot: this.#projector.snapshot() });
+  }
+
   async initialize(ownsRemoteAccess = true): Promise<void> {
     this.#ownsRemoteAccess = ownsRemoteAccess;
     this.#credentials = await this.#credentialStore.load();
@@ -120,6 +127,7 @@ export class RemoteBridge extends EventEmitter {
     this.#connection?.stop();
     this.#connection = null;
     this.#peers.clear();
+    this.#remoteTurnIds.clear();
     this.#pairing = null;
     this.#passkeys = credentials.relayUrl ? new RemotePasskeyService(credentials.relayUrl) : null;
     if (credentials.enabled) this.#startConnection();
@@ -215,6 +223,7 @@ export class RemoteBridge extends EventEmitter {
     this.#connection?.stop();
     this.#connection = null;
     this.#coordinator.clear();
+    this.#remoteTurnIds.clear();
     this.#subscriptions.clearOwner("remote");
   }
 
@@ -240,7 +249,7 @@ export class RemoteBridge extends EventEmitter {
         type: "approval.request",
         seq: this.#nextSeq(),
         threadId: approval.threadId || this.#projector.activeThreadId || "unknown",
-        approval: { id: String(id), kind: "approval", title: text(envelope.method).includes("mcp") ? "MCP 操作确认" : "命令执行确认", summary, version: approval.version, decisions: ["accept", "decline"] }
+        approval: { id: String(id), kind: "approval", title: text(envelope.method).includes("mcp") ? "MCP 操作确认" : "命令执行确认", summary, version: approval.version, decisions: ["accept", "decline"], ...(approval.choice ? { choices: approval.choice.values } : {}) }
       });
       return;
     }
@@ -257,6 +266,7 @@ export class RemoteBridge extends EventEmitter {
     }
     if (method === "turn/started" || method === "turn/completed") {
       const threadId = text(record(envelope.params).threadId);
+      if (method === "turn/completed") this.#remoteTurnIds.delete(text(record(record(envelope.params).turn).id));
       if (threadId) this.#sendEvent({ type: "turn.status", seq: this.#nextSeq(), threadId, status: this.#projector.snapshot().turnStatus });
     }
     if (method === "serverRequest/resolved") {
@@ -445,6 +455,7 @@ export class RemoteBridge extends EventEmitter {
       }
       await this.#execute(command);
       this.#rememberResult(requestId, true, "操作已完成", peer.peerId);
+      if (command.type === "remote.disable") await this.#finishRemoteDisable();
     } catch (error) {
       if (requestId) this.#rememberResult(requestId, false, error instanceof Error ? error.message : String(error), peer.peerId);
     }
@@ -472,7 +483,7 @@ export class RemoteBridge extends EventEmitter {
     }
     if (command.type === "thread.new") {
       const previous = this.#projector.activeThreadId;
-      const response = record(await this.#supervisor.call("thread/start", { cwd: this.#sessionDefaults.cwd, model: this.#sessionDefaults.model, ephemeral: false }));
+      const response = record(await this.#supervisor.call("thread/start", { cwd: this.#sessionDefaults.cwd, model: this.#sessionDefaults.model, ephemeral: false, ...REMOTE_SAFE_SETTINGS }));
       const thread = record(response.thread);
       const threadId = text(thread.id);
       if (!threadId) throw new Error("Codex 未返回新会话标识。");
@@ -487,15 +498,42 @@ export class RemoteBridge extends EventEmitter {
       const threadId = this.#projector.activeThreadId;
       if (!threadId) throw new Error("请先选择或新建会话。");
       const input = [{ type: "text", text: command.text, text_elements: [] }];
-      if (this.#projector.activeTurnId) await this.#supervisor.call("turn/steer", { threadId, expectedTurnId: this.#projector.activeTurnId, clientUserMessageId: crypto.randomUUID(), input });
+      if (this.#projector.activeTurnId) {
+        if (!this.#remoteTurnIds.has(this.#projector.activeTurnId)) throw new Error("当前任务正在桌面端运行，完成后再发送。");
+        await this.#supervisor.call("turn/steer", { threadId, expectedTurnId: this.#projector.activeTurnId, clientUserMessageId: crypto.randomUUID(), input });
+      }
       else {
-        const response = record(await this.#supervisor.call("turn/start", { threadId, clientUserMessageId: crypto.randomUUID(), input, model: null, effort: null }));
-        this.#projector.setActiveTurn(text(record(response.turn).id));
+        const response = record(await this.#supervisor.call("turn/start", { threadId, clientUserMessageId: crypto.randomUUID(), input, model: null, effort: null, ...REMOTE_SAFE_SETTINGS }));
+        const turnId = text(record(response.turn).id);
+        if (turnId) this.#remoteTurnIds.add(turnId);
+        this.#projector.setActiveTurn(turnId);
       }
       return;
     }
-    this.#coordinator.resolve(command.approvalId, command.version, command.decision);
+    if (command.type === "remote.disable") {
+      if (!this.#credentials) throw new Error("远程访问尚未启用。");
+      const credentials = { ...this.#credentials, enabled: false };
+      await this.#credentialStore.save(credentials);
+      this.#credentials = credentials;
+      await this.#auditLog.write("remote.disabled", { source: "mobile" }).catch(() => undefined);
+      return;
+    }
+    this.#coordinator.resolve(command.approvalId, command.version, command.decision, command.selection);
     await this.#auditLog.write("approval.resolved", { approvalId: command.approvalId, decision: command.decision }).catch(() => undefined);
+  }
+
+  async #finishRemoteDisable(): Promise<void> {
+    const relayUrl = this.#credentials?.relayUrl ?? "";
+    this.#connection?.stop();
+    this.#connection = null;
+    this.#peers.clear();
+    this.#remoteTurnIds.clear();
+    this.#pairing = null;
+    await this.#subscriptions.releaseOwner("remote").catch(() => undefined);
+    this.#projector.clearActiveThread();
+    this.#coordinator.clear();
+    this.#updateStatus({ enabled: false, phase: "disabled", message: "远程访问已关闭", relayUrl, pairing: null });
+    this.#syncCredentialStatus();
   }
 
   async #refreshThreads() {

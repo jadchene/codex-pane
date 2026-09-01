@@ -18,6 +18,12 @@ describe("RemoteProjector", () => {
     expect(projector.snapshot().items).toEqual([{ id: "agent-1", kind: "agent", markdown: "你好，世界", status: "running" }]);
   });
 
+  it("projects the desktop appearance for the mobile client", () => {
+    const projector = new RemoteProjector();
+    projector.setAppearance({ theme: "light", accentColor: "#2468ac" });
+    expect(projector.snapshot().appearance).toEqual({ theme: "light", accentColor: "#2468ac" });
+  });
+
   it("shows workspace-relative paths and hides paths outside the workspace", () => {
     expect(sanitizeRemoteActivityText('Get-Content "E:\\Work\\project\\src\\app.ts"', "E:\\Work\\project")).toContain('"src\\app.ts"');
     expect(sanitizeRemoteActivityText("Get-Content E:\\Secrets\\token.txt", "E:\\Work\\project")).toBe("Get-Content token.txt");
