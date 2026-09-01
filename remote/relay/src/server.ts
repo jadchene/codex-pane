@@ -45,13 +45,14 @@ type Channel = {
 };
 
 const config = loadConfig();
+const routePath = (path: string): string => config.BASE_PATH === "/" ? path : `${config.BASE_PATH}${path}`;
 const app = Fastify({ logger: true, bodyLimit: MAX_RELAY_FRAME_BYTES });
 await app.register(rateLimit, { global: true, max: 120, timeWindow: "1 minute" });
 await app.register(websocket, { options: { maxPayload: MAX_RELAY_FRAME_BYTES } });
 
 const currentDirectory = dirname(fileURLToPath(import.meta.url));
 const publicRoot = [resolve(currentDirectory, "../public"), resolve(currentDirectory, "../../public")].find(existsSync) ?? resolve(currentDirectory, "../public");
-await app.register(fastifyStatic, { root: publicRoot, prefix: "/" });
+await app.register(fastifyStatic, { root: publicRoot, prefix: routePath("/") });
 
 app.addHook("onSend", async (_request, reply, payload) => {
   reply.header("X-Content-Type-Options", "nosniff");
@@ -61,7 +62,8 @@ app.addHook("onSend", async (_request, reply, payload) => {
   return payload;
 });
 
-app.get("/health", async () => ({ ok: true, protocolVersion: 1 }));
+if (config.BASE_PATH !== "/") app.get(config.BASE_PATH, async (_request, reply) => reply.redirect(`${config.BASE_PATH}/`));
+app.get(routePath("/health"), async () => ({ ok: true, protocolVersion: 1 }));
 
 const channels = new Map<string, Channel>();
 const connections = new Set<Connection>();
@@ -188,7 +190,7 @@ const routeData = (connection: Connection, raw: unknown): void => {
   throw new Error("attachment required");
 };
 
-app.get("/ws", { websocket: true }, (socket, request) => {
+app.get(routePath("/ws"), { websocket: true }, (socket, request) => {
   if (connections.size >= config.MAX_CONNECTIONS) return socket.close(1013, "Service busy");
   const origin = request.headers.origin;
   if (origin !== undefined && origin !== config.PUBLIC_ORIGIN) return socket.close(1008, "Origin rejected");

@@ -4,6 +4,10 @@ const statusElement = document.querySelector("#status");
 const actionsElement = document.querySelector("#actions");
 const errorElement = document.querySelector("#error");
 const bootstrapRoot = document.querySelector("#bootstrap");
+const bootstrapScriptUrl = new URL(import.meta.url);
+const relayBasePath = bootstrapScriptUrl.pathname.slice(0, -"/bootstrap.js".length).replace(/\/+$/, "");
+const relayUrl = `${location.origin}${relayBasePath}`;
+const relayHomePath = `${relayBasePath}/`;
 
 const setStatus = (value) => { statusElement.textContent = value; };
 const setError = (value = "") => { errorElement.textContent = value; errorElement.hidden = !value; };
@@ -133,7 +137,14 @@ let messageQueue = Promise.resolve();
 let secureSendQueue = Promise.resolve();
 let reconnectAttempt = 0;
 let stopped = false;
+let uiLoadTimer = null;
 const queuedUiEvents = [];
+
+const clearUiLoadTimer = () => {
+  if (uiLoadTimer === null) return;
+  window.clearTimeout(uiLoadTimer);
+  uiLoadTimer = null;
+};
 
 const sendFrame = (value) => {
   if (!socket || socket.readyState !== WebSocket.OPEN) throw new Error("与中转服务的连接尚未恢复。");
@@ -157,7 +168,7 @@ const parsePairing = () => {
     const encoded = new URLSearchParams(location.hash.slice(1)).get("pair");
     if (!encoded) return null;
     const value = JSON.parse(decoder.decode(fromBase64Url(encoded)));
-    if (value.version !== 1 || value.relayOrigin !== location.origin || value.expiresAt < Date.now()) throw new Error("二维码已经过期，请在桌面端重新生成。");
+    if (value.version !== 1 || value.relayOrigin !== relayUrl || value.expiresAt < Date.now()) throw new Error("二维码已经过期，请在桌面端重新生成。");
     return value;
   } catch (error) {
     setError(error instanceof Error ? error.message : "配对二维码无效。");
@@ -184,6 +195,7 @@ const beginPairing = async () => {
 const connect = () => {
   stopped = false;
   secure = null;
+  clearUiLoadTimer();
   if (iframe) {
     iframe = null;
     uiReady = false;
@@ -194,7 +206,7 @@ const connect = () => {
   setError();
   setStatus("正在连接桌面端…");
   const protocol = location.protocol === "https:" ? "wss:" : "ws:";
-  socket = new WebSocket(`${protocol}//${location.host}/ws`);
+  socket = new WebSocket(`${protocol}//${location.host}${relayBasePath}/ws`);
   messageQueue = Promise.resolve();
   secureSendQueue = Promise.resolve();
   socket.onmessage = (event) => {
@@ -330,7 +342,7 @@ const handleSecureMessage = async (message) => {
       passkeyId: pairingDraft.passkeyId
     };
     await saveBinding(binding);
-    history.replaceState(null, "", "/");
+    history.replaceState(null, "", relayHomePath);
     pairing = null;
     pairingDraft = null;
     activeBinding = binding;
@@ -387,21 +399,31 @@ const handleSecureMessage = async (message) => {
 };
 
 const mountMobileDocument = (html) => {
-  const blobUrl = URL.createObjectURL(new Blob([html], { type: "text/html" }));
-  iframe = document.createElement("iframe");
+  clearUiLoadTimer();
+  const mountedFrame = document.createElement("iframe");
+  iframe = mountedFrame;
   uiReady = false;
-  iframe.id = "mobile-frame";
-  iframe.title = "Codex Pane 手机端";
-  iframe.sandbox = "allow-scripts allow-forms allow-popups";
-  iframe.src = blobUrl;
-  document.body.replaceChildren(iframe);
-  iframe.addEventListener("load", () => URL.revokeObjectURL(blobUrl), { once: true });
+  mountedFrame.id = "mobile-frame";
+  mountedFrame.title = "Codex Pane 手机端";
+  mountedFrame.sandbox = "allow-scripts allow-forms allow-popups";
+  mountedFrame.srcdoc = html;
+  document.body.replaceChildren(mountedFrame);
+  uiLoadTimer = window.setTimeout(() => {
+    if (iframe !== mountedFrame || uiReady) return;
+    iframe = null;
+    mountedFrame.remove();
+    document.body.replaceChildren(bootstrapRoot);
+    setStatus("手机页面加载失败");
+    setError("Safari 未能加载手机页面，请刷新后重试。");
+    setActions(button("重新加载", () => location.reload()));
+  }, 10_000);
 };
 
 window.addEventListener("message", (event) => {
   if (!iframe || event.source !== iframe.contentWindow || !event.data || event.data.source !== "codex-pane-mobile-ui") return;
   if (event.data.type === "ready") {
     uiReady = true;
+    clearUiLoadTimer();
     for (const queued of queuedUiEvents.splice(0)) iframe.contentWindow.postMessage({ source: "codex-pane-bootstrap", type: "event", event: queued }, "*");
     void sendSecure({ type: "ui.ready" }).catch((error) => setError(error.message));
     return;

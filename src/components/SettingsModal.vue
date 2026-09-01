@@ -179,7 +179,7 @@ watch(() => props.show, (show) => { if (show) void Promise.all([loadSystemFonts(
         <div class="settings-section-heading"><div class="remote-section-title"><NText strong>远程访问</NText><NText depth="3">在手机上查看和继续会话；敏感设置仍只能在桌面操作。</NText></div><NTag :type="remoteStatus.phase === 'connected' ? 'success' : remoteStatus.phase === 'error' ? 'error' : 'default'">{{ remoteStatus.message }}</NTag></div>
         <NForm label-placement="left" label-width="148" class="settings-form">
           <NFormItem label="启用远程访问"><NSwitch v-model:value="remoteEnabled" :disabled="remoteManagedElsewhere" /></NFormItem>
-          <NFormItem label="中转服务地址"><div class="remote-url-field"><NInput v-model:value="relayUrl" :disabled="remoteManagedElsewhere" :input-props="noSpellcheckInputProps" placeholder="https://pane.example.com" /><NText depth="3">填写部署后的 HTTPS 根地址；本机调试可使用 localhost。</NText></div></NFormItem>
+          <NFormItem label="中转服务地址"><div class="remote-url-field"><NInput v-model:value="relayUrl" :disabled="remoteManagedElsewhere" :input-props="noSpellcheckInputProps" placeholder="https://pane.example.com" /><NText depth="3">填写部署后的 HTTPS 地址，可包含路径前缀；本机调试可使用 localhost。</NText></div></NFormItem>
           <NFormItem label="连接设置"><NSpace><NButton type="primary" secondary :loading="remoteBusy" :disabled="remoteManagedElsewhere" @click="saveRemoteSettings">{{ remoteSaveLabel }}</NButton><NButton v-if="remoteEnabled" secondary :disabled="remoteBusy || remoteManagedElsewhere" @click="beginPairing">{{ remoteStatus.paired ? '添加手机' : '生成配对二维码' }}</NButton></NSpace></NFormItem>
         </NForm>
         <NAlert v-if="remoteManagedElsewhere" type="info">为避免手机连接反复中断，同一时间只有一个应用实例提供远程访问。关闭管理中的实例后，请重启本窗口接管。</NAlert>

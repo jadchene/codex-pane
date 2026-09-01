@@ -32,4 +32,18 @@ describe("desktop package hardening", () => {
     expect(preload).toContain("onCloseRequested:");
     expect(app).toContain("store.flushSave().then(");
   });
+
+  it("loads the signed mobile UI through a Safari-compatible isolated document", async () => {
+    const [bootstrap, bundler, viteConfig] = await Promise.all([
+      readFile(resolve("remote/relay/public/bootstrap.js"), "utf8"),
+      readFile(resolve("remote/mobile/scripts/bundle.mjs"), "utf8"),
+      readFile(resolve("remote/mobile/vite.config.ts"), "utf8")
+    ]);
+    expect(bootstrap).toContain("mountedFrame.srcdoc = html");
+    expect(bootstrap).toContain('mountedFrame.sandbox = "allow-scripts allow-forms allow-popups"');
+    expect(bootstrap).not.toContain("URL.createObjectURL(new Blob");
+    expect(bootstrap).not.toContain("allow-same-origin");
+    expect(bundler).toContain("Mobile bundle must be a classic self-contained script");
+    expect(viteConfig).toContain('format: "iife"');
+  });
 });

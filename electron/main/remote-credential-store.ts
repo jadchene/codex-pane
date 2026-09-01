@@ -4,17 +4,12 @@ import { dirname } from "node:path";
 import { safeStorage } from "electron";
 import { z } from "zod";
 import { canonicalJwk } from "../../packages/remote-protocol/src/index.js";
+import { normalizeRelayUrl } from "../shared/contracts.js";
 import { generateP256KeyPair } from "./remote-crypto.js";
 
 const isRelayUrl = (value: string): boolean => {
   if (!value) return true;
-  try {
-    const url = new URL(value);
-    const secureProtocol = url.protocol === "https:" || (url.protocol === "http:" && ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname));
-    return secureProtocol && !url.username && !url.password && url.pathname === "/" && !url.search && !url.hash;
-  } catch {
-    return false;
-  }
+  try { normalizeRelayUrl(value); return true; } catch { return false; }
 };
 
 const publicJwkSchema = z.object({ kty: z.string(), crv: z.string(), x: z.string(), y: z.string() }).passthrough();

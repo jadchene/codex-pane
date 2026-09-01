@@ -11,7 +11,6 @@ const emptySnapshot = (): MobileSnapshot => ({ deviceOnline: false, codexState: 
 const snapshot = ref(emptySnapshot());
 const error = ref("");
 const connectionState = ref<"connecting" | "connected" | "disconnected">("disconnected");
-const connectionMessage = ref("桌面未连接");
 const sessionMenuOpen = ref(false);
 const draft = ref("");
 const pendingCommands = reactive(new Map<string, MobileCommand["type"]>());
@@ -31,6 +30,12 @@ const threadBusy = computed(() => [...pendingCommands.values()].some((type) => t
 const desktopReady = computed(() => connectionState.value === "connected" && snapshot.value.deviceOnline && snapshot.value.codexState === "ready");
 const canSend = computed(() => desktopReady.value && Boolean(snapshot.value.activeThreadId) && draft.value.trim().length > 0 && !sending.value);
 const statusClass = computed(() => desktopReady.value ? "online" : "offline");
+const statusLabel = computed(() => {
+  if (connectionState.value === "disconnected") return "未连接";
+  if (snapshot.value.codexState === "starting") return "启动中";
+  if (snapshot.value.codexState === "error") return "异常";
+  return desktopReady.value ? "已连接" : "待机";
+});
 
 const markdown = (id: string, value: string): string => {
   const cached = markdownCache.get(id);
@@ -76,14 +81,13 @@ const handleScroll = (): void => {
 
 const handleEvent = (event: DesktopEvent): void => {
   if (event.type === "snapshot") {
-    void updateItems(() => { snapshot.value = event.snapshot; connectionMessage.value = event.snapshot.deviceOnline ? "桌面已连接" : "桌面未连接"; });
+    void updateItems(() => { snapshot.value = event.snapshot; });
     return;
   }
   if (event.type === "device.status") {
     snapshot.value.deviceOnline = event.online;
     snapshot.value.codexState = event.codexState;
     snapshot.value.codexMessage = event.message;
-    connectionMessage.value = event.message;
     return;
   }
   if (event.type === "thread.summary") {
@@ -127,7 +131,7 @@ const connect = (): void => {
   client?.stop();
   client = new RemoteClient(handleEvent, (state, message) => {
     connectionState.value = state;
-    connectionMessage.value = message;
+    if (message.includes("格式不兼容")) error.value = message;
   });
   client.start();
 };
@@ -183,7 +187,7 @@ onBeforeUnmount(() => { window.removeEventListener("keydown", handleKeydown); cl
 <template>
   <NConfigProvider :theme="darkTheme">
   <main class="app-shell">
-    <header><div><h1>{{ snapshot.activeThreadTitle }}</h1><p><span class="status-dot" :class="statusClass" />{{ connectionMessage }} · {{ snapshot.codexMessage }}</p></div><div class="session-menu"><button ref="sessionButton" class="session-button" aria-label="打开会话列表" :aria-expanded="sessionMenuOpen" @click="toggleSessionMenu">会话</button><button v-if="sessionMenuOpen" class="drawer-backdrop" tabindex="-1" aria-hidden="true" @click="closeSessionMenu" /><aside v-if="sessionMenuOpen" aria-label="最近会话"><div class="drawer-header"><strong>最近会话</strong><button ref="drawerCloseButton" aria-label="关闭会话列表" @click="closeSessionMenu">×</button></div><div class="drawer-body"><div v-if="!snapshot.threads.length" class="drawer-empty">暂无会话</div><button v-for="thread in snapshot.threads" :key="thread.id" class="thread-row" :class="{ active: thread.id === snapshot.activeThreadId }" :disabled="threadBusy" @click="openThread(thread.id)"><strong>{{ thread.title }}</strong><span>{{ thread.preview }}</span></button></div><div class="drawer-actions"><NButton type="primary" block :disabled="!desktopReady || threadBusy" :loading="threadBusy" @click="newThread(); sessionMenuOpen = false">新建会话</NButton></div></aside></div></header>
+    <header><div class="header-title"><h1>{{ snapshot.activeThreadTitle }}</h1><p><span class="status-dot" :class="statusClass" />{{ statusLabel }}</p></div><div class="session-menu"><button ref="sessionButton" class="session-button" aria-label="打开会话列表" :aria-expanded="sessionMenuOpen" @click="toggleSessionMenu">会话</button><button v-if="sessionMenuOpen" class="drawer-backdrop" tabindex="-1" aria-hidden="true" @click="closeSessionMenu" /><aside v-if="sessionMenuOpen" aria-label="最近会话"><div class="drawer-header"><strong>最近会话</strong><button ref="drawerCloseButton" aria-label="关闭会话列表" @click="closeSessionMenu">×</button></div><div class="drawer-body"><div v-if="!snapshot.threads.length" class="drawer-empty">暂无会话</div><button v-for="thread in snapshot.threads" :key="thread.id" class="thread-row" :class="{ active: thread.id === snapshot.activeThreadId }" :disabled="threadBusy" @click="openThread(thread.id)"><strong>{{ thread.title }}</strong><span>{{ thread.preview }}</span></button></div><div class="drawer-actions"><NButton type="primary" block :disabled="!desktopReady || threadBusy" :loading="threadBusy" @click="newThread(); sessionMenuOpen = false">新建会话</NButton></div></aside></div></header>
     <NAlert v-if="error" class="connection-alert" closable type="warning" @close="error = ''">{{ error }}</NAlert>
     <section ref="scrollContainer" class="conversation" @scroll="handleScroll">
       <div v-if="!snapshot.activeThreadId" class="empty-state"><h2>选择一个会话</h2><p>可以继续最近的会话，也可以新建会话。</p></div>

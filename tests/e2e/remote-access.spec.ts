@@ -64,7 +64,8 @@ const terminateApplication = async (application: ElectronApplication): Promise<v
 const expectMobileRejected = async (origin: string, attach: (challenge: { connectionId: string; nonce: string }) => unknown): Promise<string> => new Promise((resolvePromise, reject) => {
   const url = new URL(origin);
   url.protocol = "ws:";
-  url.pathname = "/ws";
+  const basePath = url.pathname.replace(/\/+$/, "");
+  url.pathname = `${basePath}/ws`;
   const socket = new WebSocket(url);
   const timeout = setTimeout(() => { socket.terminate(); reject(new Error("Unknown mobile connection was not rejected")); }, 5_000);
   socket.on("message", (raw) => {
@@ -84,8 +85,8 @@ const openMobileWindow = async (application: ElectronApplication, url: string, p
   await application.evaluate(async ({ BrowserWindow }, { target, sessionPartition }) => {
     const window = new BrowserWindow({
       show: true,
-      width: 390,
-      height: 844,
+      width: 402,
+      height: 874,
       resizable: false,
       webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, ...(sessionPartition ? { partition: sessionPartition } : {}) }
     });
@@ -110,10 +111,12 @@ test("completes the real thin-relay pairing, Passkey, E2EE, UI delivery, and con
   const approvalResponseLog = resolve("test-results", `remote-approval-${randomUUID()}.jsonl`);
   await Promise.all([writeFile(sessionFixtureMarker, "", "utf8"), writeFile(requestLog, "", "utf8"), writeFile(approvalResponseLog, "", "utf8")]);
   const port = await freePort();
-  const relayOrigin = `http://localhost:${port}`;
+  const publicOrigin = `http://localhost:${port}`;
+  const relayBasePath = "/codex-pane-relay";
+  const relayOrigin = `${publicOrigin}${relayBasePath}`;
   const relay = spawn(process.execPath, [resolve("remote", "relay", "dist", "server.js")], {
     cwd: resolve("remote", "relay"),
-    env: { ...process.env, HOST: "127.0.0.1", PORT: String(port), PUBLIC_ORIGIN: relayOrigin },
+    env: { ...process.env, HOST: "127.0.0.1", PORT: String(port), PUBLIC_ORIGIN: publicOrigin, BASE_PATH: relayBasePath },
     stdio: ["ignore", "pipe", "pipe"]
   });
   relay.stderr?.on("data", (data) => process.stdout.write(`[relay:stderr] ${String(data)}`));
@@ -180,6 +183,40 @@ test("completes the real thin-relay pairing, Passkey, E2EE, UI delivery, and con
     await expect(sessionMenu).toBeVisible({ timeout: 20_000 });
     await expect(frame.getByRole("button", { name: "新会话", exact: true })).toBeEnabled();
     expect(await mobile.evaluate(() => window.innerWidth)).toBeLessThanOrEqual(420);
+    const mobileLayout = await frame.locator(".app-shell").evaluate((element) => {
+      const bounds = element.getBoundingClientRect();
+      const textarea = document.querySelector("textarea");
+      const footer = document.querySelector("footer")?.getBoundingClientRect();
+      return {
+        left: bounds.left,
+        right: bounds.right,
+        height: bounds.height,
+        bottom: bounds.bottom,
+        viewportWidth: window.innerWidth,
+        viewportHeight: window.innerHeight,
+        documentWidth: document.documentElement.scrollWidth,
+        footerBottom: footer?.bottom ?? 0,
+        inputFontSize: textarea ? Number.parseFloat(getComputedStyle(textarea).fontSize) : 0
+      };
+    });
+    expect(mobileLayout.left).toBeGreaterThanOrEqual(0);
+    expect(mobileLayout.right).toBeLessThanOrEqual(mobileLayout.viewportWidth + 1);
+    expect(mobileLayout.height).toBeGreaterThanOrEqual(mobileLayout.viewportHeight - 1);
+    expect(mobileLayout.bottom).toBeLessThanOrEqual(mobileLayout.viewportHeight + 1);
+    expect(mobileLayout.footerBottom).toBeGreaterThanOrEqual(mobileLayout.viewportHeight - 1);
+    expect(mobileLayout.documentWidth).toBeLessThanOrEqual(mobileLayout.viewportWidth);
+    expect(mobileLayout.inputFontSize).toBeGreaterThanOrEqual(16);
+    const scrollCheck = await frame.locator(".conversation").evaluate((element) => {
+      const marker = document.createElement("div");
+      marker.style.height = "2000px";
+      element.append(marker);
+      element.scrollTop = element.scrollHeight;
+      const result = { scrollTop: element.scrollTop, scrollHeight: element.scrollHeight, clientHeight: element.clientHeight };
+      marker.remove();
+      return result;
+    });
+    expect(scrollCheck.scrollHeight).toBeGreaterThan(scrollCheck.clientHeight);
+    expect(scrollCheck.scrollTop).toBeGreaterThan(0);
     await attachScreenshot(testInfo, "mobile-conversation", mobile);
     await frame.locator("body").evaluate(() => window.parent.postMessage({
       source: "codex-pane-mobile-ui",
@@ -206,6 +243,12 @@ test("completes the real thin-relay pairing, Passkey, E2EE, UI delivery, and con
     await expect.poll(() => frame.locator("body").textContent()).toContain("示例会话 A");
     await frame.getByRole("button", { name: /示例会话 A/ }).click();
     await expect(frame.getByRole("heading", { name: "示例会话 A" })).toBeVisible();
+    await expect(frame.getByText("已通过兼容分页加载历史", { exact: true })).toBeVisible();
+    await expect.poll(async () => {
+      const requests = (await readFile(requestLog, "utf8")).trim().split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line) as { method: string; params: Record<string, unknown> });
+      return requests.some((request) => request.method === "thread/items/list")
+        && requests.some((request) => request.method === "thread/turns/list" && request.params.itemsView === "full");
+    }).toBe(true);
     await frame.getByPlaceholder("输入消息…").fill("来自手机端的加密消息");
     await frame.getByRole("button", { name: "发送" }).click();
 

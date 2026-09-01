@@ -60,6 +60,10 @@ const resultFor = (method, params = {}) => {
     model: "fixture-model",
     reasoningEffort: "medium"
   };
+  if (method === "thread/turns/list") return {
+    data: params.itemsView === "full" ? [{ id: "fixture-history-turn", status: "completed", items: [{ id: "fixture-history-item", type: "agentMessage", text: "已通过兼容分页加载历史" }] }] : [{ id: "fixture-history-turn", status: "completed", items: [] }],
+    nextCursor: null
+  };
   return {};
 };
 
@@ -79,6 +83,10 @@ input.on("line", (line) => {
     return;
   }
   if (message.id !== undefined && message.method) {
+    if (message.method === "thread/items/list") {
+      write({ id: message.id, error: { code: -32601, message: "thread/items/list is not supported yet" } });
+      return;
+    }
     write({ id: message.id, result: resultFor(message.method, message.params) });
     if (message.method === "turn/start" && process.env.CODEX_PANE_APPROVAL_ON_TURN_START === "1" && !approvalSent) {
       setTimeout(() => sendApproval(message.params?.threadId || "fixture-thread"), 50);

@@ -6,8 +6,10 @@ Codex Pane 远程访问由稳定的极简中转、桌面 Remote Bridge 和桌面
 
 ## 部署中转服务
 
+在仓库根目录运行 `npm run package:relay`，会在 `release/relay-deploy` 生成可独立上传的最小部署目录。将整个目录上传到服务器，然后按照目录中的 `README.md` 或 `README.zh-CN.md` 操作。
+
 1. 将域名解析到服务器，并开放 TCP 80/443 和 UDP 443。
-2. 将 `relay/.env.example` 复制为 `relay/.env`，填写不带协议和路径的域名 `PANE_DOMAIN`；只有确有需要时才调整连接上限。
+2. 将 `relay/.env.example` 复制为 `relay/.env`，填写不带协议和路径的域名 `PANE_DOMAIN`。默认 `PANE_BASE_PATH=/`；复用现有域名时可以配置 `/codex-pane-relay` 等路径前缀。只有确有需要时才调整连接上限。
 3. 在 `remote/relay` 中运行 `docker compose up -d --build`。
 4. 在 Codex Pane 中打开“设置 → 远程访问”，填写 `https://<你的域名>`，启用并保存。
 5. 生成配对二维码，用手机扫描并创建 Passkey。

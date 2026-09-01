@@ -1,8 +1,8 @@
 {
   "name": "codex-pane",
-  "version": "0.1.4",
+  "version": "0.2.0",
   "private": true,
-  "description": "A multi-pane desktop workbench for Codex app-server.",
+  "description": "A desktop Codex workbench with secure mobile access.",
   "author": "chenjd",
   "license": "MIT",
   "type": "module",
@@ -20,6 +20,7 @@
     "verify:release": "npm run verify:desktop && npm run probe:app-server && npm run package:win && npm run test:packaged",
     "probe:app-server": "node scripts/probe-app-server.mjs",
     "package:win": "npm run build && electron-builder --win dir",
+    "package:relay": "pwsh -NoProfile -File scripts/package-relay-deploy.ps1",
     "test:packaged": "node scripts/run-packaged-smoke.mjs",
     "test:packaged:live": "node scripts/run-packaged-live.mjs",
     "test:approval:live": "node scripts/run-live-approval.mjs",

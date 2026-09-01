@@ -11,10 +11,11 @@ export type RelayConnectionEvent =
   | { type: "peerOffline"; peerId: string }
   | { type: "data"; peerId: string; payload: string };
 
-const toWebSocketUrl = (relayUrl: string): string => {
+export const toWebSocketUrl = (relayUrl: string): string => {
   const url = new URL(relayUrl);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-  url.pathname = "/ws";
+  const basePath = url.pathname.replace(/\/+$/, "");
+  url.pathname = `${basePath}/ws`;
   url.search = "";
   url.hash = "";
   return url.toString();

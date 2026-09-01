@@ -18,10 +18,11 @@ describe("renderer IPC contracts", () => {
 
   it("requires HTTPS for remote relays except explicit loopback development", () => {
     expect(remoteSettingsSchema.parse({ enabled: true, relayUrl: "https://pane.example.com" }).relayUrl).toBe("https://pane.example.com");
+    expect(remoteSettingsSchema.parse({ enabled: true, relayUrl: "https://pane.example.com/codex-pane-relay/" }).relayUrl).toBe("https://pane.example.com/codex-pane-relay");
     expect(remoteSettingsSchema.parse({ enabled: true, relayUrl: "http://127.0.0.1:3000" }).relayUrl).toBe("http://127.0.0.1:3000");
     expect(() => remoteSettingsSchema.parse({ enabled: true, relayUrl: "http://pane.example.com" })).toThrow("HTTPS");
-    expect(() => remoteSettingsSchema.parse({ enabled: true, relayUrl: "https://user:secret@pane.example.com" })).toThrow("不含账号");
-    expect(() => remoteSettingsSchema.parse({ enabled: true, relayUrl: "https://pane.example.com/relay?token=secret" })).toThrow("不含账号");
+    expect(() => remoteSettingsSchema.parse({ enabled: true, relayUrl: "https://user:secret@pane.example.com" })).toThrow("不含账号或参数");
+    expect(() => remoteSettingsSchema.parse({ enabled: true, relayUrl: "https://pane.example.com/relay?token=secret" })).toThrow("不含账号或参数");
   });
 
   it("allows only the supported thread cwd update and optimistic message identity", () => {

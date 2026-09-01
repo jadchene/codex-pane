@@ -6,8 +6,10 @@ Codex Pane remote access uses a stable thin relay, a desktop Remote Bridge, and 
 
 ## Deploy the relay
 
+Run `npm run package:relay` from the repository root to create a minimal, self-contained deployment directory at `release/relay-deploy`. Upload that directory to the server and follow its `README.md` or `README.zh-CN.md`.
+
 1. Point a domain at the server and allow inbound TCP 80/443 and UDP 443.
-2. Copy `relay/.env.example` to `relay/.env` and set `PANE_DOMAIN` to a hostname without a scheme or path. Adjust the connection limits only when necessary.
+2. Copy `relay/.env.example` to `relay/.env` and set `PANE_DOMAIN` to a hostname without a scheme or path. `PANE_BASE_PATH=/` is the default; set a prefix such as `/codex-pane-relay` when sharing an existing domain. Adjust the connection limits only when necessary.
 3. Run `docker compose up -d --build` from `remote/relay`.
 4. In Codex Pane, open Settings → Remote Access, enter `https://<your-domain>`, enable remote access, and save.
 5. Generate a pairing QR code, scan it on the phone, and create a Passkey.

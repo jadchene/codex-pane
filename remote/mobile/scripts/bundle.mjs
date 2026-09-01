@@ -13,7 +13,9 @@ if (stylesheet) {
 const moduleScript = html.match(/<script type="module" crossorigin src="([^"]+)"><\/script>/);
 if (!moduleScript) throw new Error("Mobile entry script was not found");
 const script = await readFile(resolve(root, "dist", moduleScript[1].replace(/^\//, "")), "utf8");
-html = html.replace(moduleScript[0], () => `<script type="module">${script.replaceAll("</script", "<\\/script")}</script>`);
+html = html.replace(moduleScript[0], "");
+html = html.replace("</body>", () => `<script>${script.replaceAll("</script", "<\\/script")}</script></body>`);
+if (html.includes('<script type="module"') || /\bexport\s+default\b/.test(script)) throw new Error("Mobile bundle must be a classic self-contained script");
 const output = resolve(root, "dist-bundle", "mobile.html");
 await mkdir(dirname(output), { recursive: true });
 await writeFile(output, html, "utf8");

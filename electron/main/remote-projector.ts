@@ -5,7 +5,12 @@ import { win32 } from "node:path";
 
 const record = (value: unknown): Record<string, unknown> => value && typeof value === "object" ? value as Record<string, unknown> : {};
 const text = (value: unknown): string => typeof value === "string" ? value : "";
-const truncate = (value: string, limit: number): string => value.length <= limit ? value : `${value.slice(0, limit)}\n…内容已截断`;
+const TRUNCATION_SUFFIX = "\n…内容已截断";
+const truncate = (value: string, limit: number): string => {
+  if (value.length <= limit) return value;
+  if (limit <= TRUNCATION_SUFFIX.length) return value.slice(0, limit);
+  return `${value.slice(0, limit - TRUNCATION_SUFFIX.length)}${TRUNCATION_SUFFIX}`;
+};
 const safeText = (value: unknown, limit = 20_000): string => truncate(redactSensitiveText(text(value), true), limit);
 const safePath = (path: string, cwd: string): string => {
   if (cwd) {
@@ -106,7 +111,7 @@ export class RemoteProjector {
         status: rawStatus.includes("active") ? "running" as const : "idle" as const,
         unread: false
       }];
-    });
+    }).slice(0, 100);
     return this.#threads;
   }
 
@@ -183,7 +188,7 @@ export class RemoteProjector {
     return {
       deviceOnline: true,
       codexState: phase,
-      codexMessage: this.#connection.message,
+      codexMessage: safeText(this.#connection.message, 1_000),
       activeThreadId: this.#activeThreadId,
       activeThreadTitle: this.#activeThreadTitle,
       turnStatus: this.#turnStatus,

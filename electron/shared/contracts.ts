@@ -102,16 +102,23 @@ export type ProtocolEvent = {
   payload: unknown;
 };
 
+const relayPathPattern = /^\/(?:[A-Za-z0-9._~-]+(?:\/[A-Za-z0-9._~-]+)*)?\/?$/;
+
+export const normalizeRelayUrl = (value: string): string => {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  const url = new URL(trimmed);
+  const secureProtocol = url.protocol === "https:" || (url.protocol === "http:" && ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname));
+  if (!secureProtocol || url.username || url.password || url.search || url.hash || !relayPathPattern.test(url.pathname)) throw new Error("Invalid relay URL");
+  const basePath = url.pathname.replace(/\/+$/, "");
+  return `${url.origin}${basePath}`;
+};
+
 export const remoteSettingsSchema = z.object({
   enabled: z.boolean(),
   relayUrl: z.string().trim().max(2_048).refine((value) => {
-    if (!value) return true;
-    try {
-      const url = new URL(value);
-      const secureProtocol = url.protocol === "https:" || (url.protocol === "http:" && ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname));
-      return secureProtocol && !url.username && !url.password && url.pathname === "/" && !url.search && !url.hash;
-    } catch { return false; }
-  }, "请填写不含账号、路径或参数的 HTTPS 中转服务地址；本机调试可使用 HTTP")
+    try { normalizeRelayUrl(value); return true; } catch { return false; }
+  }, "请填写不含账号或参数的 HTTPS 中转服务地址；可以包含路径前缀，本机调试可使用 HTTP").transform(normalizeRelayUrl)
 }).superRefine((value, context) => {
   if (value.enabled && !value.relayUrl) context.addIssue({ code: "custom", path: ["relayUrl"], message: "启用远程访问前请填写中转服务地址" });
 });

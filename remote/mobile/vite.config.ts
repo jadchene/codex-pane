@@ -8,7 +8,7 @@ export default defineConfig({
   build: {
     outDir: "dist",
     emptyOutDir: true,
-    rollupOptions: { output: { inlineDynamicImports: true, entryFileNames: "assets/mobile.js", assetFileNames: "assets/mobile.[ext]" } }
+    rollupOptions: { output: { format: "iife", name: "CodexPaneMobile", inlineDynamicImports: true, entryFileNames: "assets/mobile.js", assetFileNames: "assets/mobile.[ext]" } }
   },
   server: { port: 5174 }
 });

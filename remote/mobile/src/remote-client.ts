@@ -36,7 +36,11 @@ export class RemoteClient {
       return;
     }
     if (message.data.type !== "event") return;
-    try { this.#onEvent(desktopEventSchema.parse(message.data.event)); }
-    catch { this.#onState("disconnected", "收到无法识别的桌面消息"); }
+    const parsed = desktopEventSchema.safeParse(message.data.event);
+    if (parsed.success) this.#onEvent(parsed.data);
+    else {
+      console.warn("Rejected an incompatible desktop event", parsed.error.issues);
+      this.#onState("connected", "桌面消息格式不兼容，请更新桌面端");
+    }
   };
 }

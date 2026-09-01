@@ -7,7 +7,7 @@ import { app } from "electron";
 import { z } from "zod";
 import type { AuthenticationResponseJSON, RegistrationResponseJSON } from "@simplewebauthn/server";
 import type { AppServerSupervisor } from "./app-server-supervisor.js";
-import type { ConnectionState, ProtocolEvent, RemoteAccessStatus, RemotePairingInfo, RemoteSettings } from "../shared/contracts.js";
+import { normalizeRelayUrl, type ConnectionState, type ProtocolEvent, type RemoteAccessStatus, type RemotePairingInfo, type RemoteSettings } from "../shared/contracts.js";
 import {
   mobileCommandSchema,
   pairingHelloSchema,
@@ -28,6 +28,7 @@ import { RemoteProjector, sanitizeRemoteActivityText } from "./remote-projector.
 import { ServerRequestCoordinator } from "./server-request-coordinator.js";
 import { SerialTaskQueue } from "./serial-task-queue.js";
 import { ThreadSubscriptionRegistry } from "./thread-subscription-registry.js";
+import { loadRemoteThread } from "./remote-history.js";
 
 const record = (value: unknown): Record<string, unknown> => value && typeof value === "object" ? value as Record<string, unknown> : {};
 const text = (value: unknown): string => typeof value === "string" ? value : "";
@@ -113,7 +114,7 @@ export class RemoteBridge extends EventEmitter {
     this.#assertOwnership();
     let credentials = this.#credentials;
     if (!credentials) credentials = this.#credentialStore.createIdentity();
-    credentials = { ...credentials, enabled: settings.enabled, relayUrl: settings.relayUrl.replace(/\/$/, "") };
+    credentials = { ...credentials, enabled: settings.enabled, relayUrl: normalizeRelayUrl(settings.relayUrl) };
     await this.#credentialStore.save(credentials);
     this.#credentials = credentials;
     this.#connection?.stop();
@@ -144,7 +145,7 @@ export class RemoteBridge extends EventEmitter {
     this.#sendPolicy();
     const pairingPayload = Buffer.from(JSON.stringify({
       version: 1,
-      relayOrigin: new URL(credentials.relayUrl).origin,
+      relayOrigin: credentials.relayUrl,
       channelId: credentials.channelId,
       pairingId,
       pairingSecret: material.secret,
@@ -153,7 +154,7 @@ export class RemoteBridge extends EventEmitter {
       expiresAt
     })).toString("base64url");
     const pairingUrl = new URL(credentials.relayUrl);
-    pairingUrl.pathname = "/";
+    pairingUrl.pathname = `${pairingUrl.pathname.replace(/\/+$/, "")}/`;
     pairingUrl.search = "";
     pairingUrl.hash = new URLSearchParams({ pair: pairingPayload }).toString();
     this.#updatePairingStatus(pairingUrl.toString());
@@ -462,13 +463,10 @@ export class RemoteBridge extends EventEmitter {
     }
     if (command.type === "thread.open") {
       const previous = this.#projector.activeThreadId;
-      const response = record(await this.#supervisor.call("thread/resume", { threadId: command.threadId, excludeTurns: false, initialTurnsPage: { limit: 100, sortDirection: "desc", itemsView: "full" } }));
+      const { response, thread } = await loadRemoteThread((method, params) => this.#supervisor.call(method, params), command.threadId);
       if (previous && previous !== command.threadId) await this.#subscriptions.release(previous, "remote");
       this.#subscriptions.acquire(command.threadId, "remote");
-      const thread = record(response.thread);
-      const historyPage = record(response.initialTurnsPage);
-      const history = Array.isArray(historyPage.data) ? [...historyPage.data].reverse() : thread.turns;
-      this.#projector.setActiveThread({ ...thread, cwd: text(response.cwd) || text(thread.cwd), turns: history });
+      this.#projector.setActiveThread({ ...thread, cwd: text(response.cwd) || text(thread.cwd) });
       this.#sendEvent({ type: "snapshot", seq: this.#nextSeq(), snapshot: this.#projector.snapshot() });
       return;
     }

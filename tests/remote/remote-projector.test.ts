@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { projectItem, RemoteProjector, sanitizeRemoteActivityText } from "../../electron/main/remote-projector";
+import { mobileSnapshotSchema } from "../../packages/remote-protocol/src/index";
 
 describe("RemoteProjector", () => {
   it("projects only safe mobile fields and redacts secrets", () => {
@@ -33,5 +34,32 @@ describe("RemoteProjector", () => {
     projector.setActiveThread({ id: "thread-1", turns: [{ id: "turn-finished", status: "completed", items: [] }, { id: "turn-running", status: "inProgress", items: [] }] });
     expect(projector.activeTurnId).toBe("turn-running");
     expect(projector.snapshot().turnStatus).toBe("running");
+  });
+
+  it("keeps truncated real-world snapshots within protocol limits", () => {
+    const projector = new RemoteProjector();
+    projector.setConnection({ phase: "ready", generation: 1, codexVersion: "1", compatible: true, message: "状".repeat(1_100) });
+    projector.setThreads(Array.from({ length: 101 }, (_, index) => ({
+      id: `thread-${index}`,
+      name: "标题".repeat(150),
+      preview: "预览".repeat(600),
+      updatedAt: index
+    })));
+    projector.setActiveThread({
+      id: "thread-0",
+      name: "标题".repeat(150),
+      turns: [{ items: [{ id: "agent-1", type: "agentMessage", text: "回复".repeat(100_100) }] }]
+    });
+
+    const snapshot = projector.snapshot();
+    const firstThread = snapshot.threads[0];
+    const firstItem = snapshot.items[0];
+    expect(snapshot.threads).toHaveLength(100);
+    expect(snapshot.activeThreadTitle).toHaveLength(200);
+    expect(firstThread?.preview).toHaveLength(1_000);
+    expect(firstItem?.kind).toBe("agent");
+    if (firstItem?.kind !== "agent") throw new Error("Expected an agent item");
+    expect(firstItem.markdown).toHaveLength(200_000);
+    expect(mobileSnapshotSchema.safeParse(snapshot).success).toBe(true);
   });
 });
