@@ -34,7 +34,18 @@ export const forceTerminateProcessTree = (pid: number | undefined): Promise<void
   }
   return new Promise((resolve) => {
     const killer = spawn("taskkill.exe", ["/pid", String(pid), "/t", "/f"], { windowsHide: true, stdio: "ignore", shell: false });
-    killer.once("error", () => resolve());
-    killer.once("exit", () => resolve());
+    let settled = false;
+    const finish = (): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      try { killer.kill(); } catch { /* The cleanup process may already have exited. */ }
+      finish();
+    }, 5_000);
+    killer.once("error", finish);
+    killer.once("exit", finish);
   });
 };

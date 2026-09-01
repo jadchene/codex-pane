@@ -45,6 +45,7 @@ const pairingTimeLabel = computed(() => {
   const seconds = pairingSecondsRemaining.value;
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 });
+const remoteManagedElsewhere = computed(() => remoteStatus.value.phase === "standby");
 const fontOptions = computed(() => [...new Set([fontFamily.value, ...systemFonts.value].filter(Boolean))].map((family) => ({ label: family, value: family })));
 const display = (value: string | null | undefined): string => value || "—";
 const noSpellcheckInputProps = { spellcheck: false, autocorrect: "off", autocapitalize: "off" } as const;
@@ -167,10 +168,11 @@ watch(() => props.show, (show) => { if (show) void Promise.all([loadSystemFonts(
       <section class="settings-section">
         <div class="settings-section-heading"><NText strong>远程访问</NText><NTag :type="remoteStatus.phase === 'connected' ? 'success' : remoteStatus.phase === 'error' ? 'error' : 'default'">{{ remoteStatus.message }}</NTag></div>
         <NForm label-placement="left" label-width="148" class="settings-form">
-          <NFormItem label="启用远程访问"><NSwitch v-model:value="remoteEnabled" /></NFormItem>
-          <NFormItem label="中转服务地址"><NInput v-model:value="relayUrl" :input-props="noSpellcheckInputProps" placeholder="https://pane.example.com" /></NFormItem>
-          <NFormItem label="连接设置"><NSpace><NButton type="primary" secondary :loading="remoteBusy" @click="saveRemoteSettings">保存并连接</NButton><NButton v-if="remoteEnabled" secondary :disabled="remoteBusy" @click="beginPairing">{{ remoteStatus.paired ? '添加手机' : '生成配对二维码' }}</NButton></NSpace></NFormItem>
+          <NFormItem label="启用远程访问"><NSwitch v-model:value="remoteEnabled" :disabled="remoteManagedElsewhere" /></NFormItem>
+          <NFormItem label="中转服务地址"><NInput v-model:value="relayUrl" :disabled="remoteManagedElsewhere" :input-props="noSpellcheckInputProps" placeholder="https://pane.example.com" /></NFormItem>
+          <NFormItem label="连接设置"><NSpace><NButton type="primary" secondary :loading="remoteBusy" :disabled="remoteManagedElsewhere" @click="saveRemoteSettings">保存并连接</NButton><NButton v-if="remoteEnabled" secondary :disabled="remoteBusy || remoteManagedElsewhere" @click="beginPairing">{{ remoteStatus.paired ? '添加手机' : '生成配对二维码' }}</NButton></NSpace></NFormItem>
         </NForm>
+        <NAlert v-if="remoteManagedElsewhere" type="info">为避免手机连接反复中断，同一时间只有一个应用实例提供远程访问。关闭管理中的实例后，请重启本窗口接管。</NAlert>
         <NAlert v-if="remoteError" type="error" closable @close="remoteError = ''">{{ remoteError }}</NAlert>
         <NCard v-if="remoteStatus.pairing" size="small" class="pairing-card">
           <NSpace align="center" :wrap="false">
@@ -186,8 +188,8 @@ watch(() => props.show, (show) => { if (show) void Promise.all([loadSystemFonts(
           </NSpace>
         </NCard>
         <NCard v-if="remoteStatus.passkeys.length" size="small" title="已绑定手机" class="passkey-card">
-          <div v-for="passkey in remoteStatus.passkeys" :key="passkey.id" class="passkey-row"><div><NText>{{ passkey.name }}</NText><NText depth="3">最近使用：{{ passkey.lastUsedAt ? new Date(passkey.lastUsedAt).toLocaleString() : '尚未使用' }}</NText></div><NPopconfirm @positive-click="removePasskey(passkey.id)"><template #trigger><NButton size="small" tertiary type="error">撤销</NButton></template>撤销后，这部手机将立即无法连接。</NPopconfirm></div>
-          <template #footer><NPopconfirm @positive-click="logoutAllMobiles"><template #trigger><NButton size="small" secondary>退出所有手机</NButton></template>所有手机需要重新使用 Passkey 登录。</NPopconfirm></template>
+          <div v-for="passkey in remoteStatus.passkeys" :key="passkey.id" class="passkey-row"><div><NText>{{ passkey.name }}</NText><NText depth="3">最近使用：{{ passkey.lastUsedAt ? new Date(passkey.lastUsedAt).toLocaleString() : '尚未使用' }}</NText></div><NPopconfirm :disabled="remoteManagedElsewhere" @positive-click="removePasskey(passkey.id)"><template #trigger><NButton size="small" tertiary type="error" :disabled="remoteManagedElsewhere">撤销</NButton></template>撤销后，这部手机将立即无法连接。</NPopconfirm></div>
+          <template #footer><NPopconfirm :disabled="remoteManagedElsewhere" @positive-click="logoutAllMobiles"><template #trigger><NButton size="small" secondary :disabled="remoteManagedElsewhere">退出所有手机</NButton></template>所有手机需要重新使用 Passkey 登录。</NPopconfirm></template>
         </NCard>
       </section>
       <NDivider />

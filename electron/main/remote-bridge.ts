@@ -82,6 +82,7 @@ export class RemoteBridge extends EventEmitter {
   #policyRevision = 0;
   #seq = 0;
   #mobileDocument: string | null = null;
+  #ownsRemoteAccess = true;
   #sessionDefaults: { cwd: string | null; model: string | null } = { cwd: null, model: null };
   #status: RemoteAccessStatus = { enabled: false, phase: "disabled", message: "远程访问已关闭", relayUrl: "", paired: false, pairing: null, passkeys: [] };
 
@@ -96,14 +97,20 @@ export class RemoteBridge extends EventEmitter {
 
   get status(): RemoteAccessStatus { return structuredClone(this.#status); }
 
-  async initialize(): Promise<void> {
+  async initialize(ownsRemoteAccess = true): Promise<void> {
+    this.#ownsRemoteAccess = ownsRemoteAccess;
     this.#credentials = await this.#credentialStore.load();
     this.#projector.setConnection(this.#supervisor.state);
+    if (!ownsRemoteAccess) {
+      this.#showStandbyStatus();
+      return;
+    }
     if (this.#credentials?.enabled) this.#startConnection();
     else if (this.#credentials) this.#syncCredentialStatus();
   }
 
   async updateSettings(settings: RemoteSettings): Promise<RemoteAccessStatus> {
+    this.#assertOwnership();
     let credentials = this.#credentials;
     if (!credentials) credentials = this.#credentialStore.createIdentity();
     credentials = { ...credentials, enabled: settings.enabled, relayUrl: settings.relayUrl.replace(/\/$/, "") };
@@ -126,6 +133,7 @@ export class RemoteBridge extends EventEmitter {
   }
 
   async beginPairing(): Promise<RemoteAccessStatus> {
+    this.#assertOwnership();
     const credentials = this.#credentials;
     if (!credentials?.enabled || !credentials.relayUrl || !this.#connection) throw new Error("请先填写中转服务地址并启用远程访问。");
     const material = RemoteCredentialStore.createPairingSecret();
@@ -153,6 +161,7 @@ export class RemoteBridge extends EventEmitter {
   }
 
   async confirmPairing(pairingId: string): Promise<void> {
+    this.#assertOwnership();
     const pairing = this.#pairing;
     if (!pairing || pairing.pairingId !== pairingId || pairing.expiresAt < Date.now()) throw new Error("配对请求已过期，请重新生成二维码。");
     if (!pairing.readyToConfirm || !pairing.peerId) throw new Error("请先在手机上创建 Passkey。");
@@ -170,6 +179,7 @@ export class RemoteBridge extends EventEmitter {
   }
 
   async revokePasskey(credentialId: string): Promise<void> {
+    this.#assertOwnership();
     if (!this.#credentials) return;
     const now = Date.now();
     const target = this.#credentials.devices.find((device) => device.passkey.id === credentialId && device.revokedAt === null);
@@ -183,6 +193,7 @@ export class RemoteBridge extends EventEmitter {
   }
 
   logoutAllMobiles(): void {
+    this.#assertOwnership();
     this.#peers.clear();
     this.#connection?.reconnect();
     this.#updateStatus({ phase: "connecting", message: "已退出所有手机，正在重新连接…" });
@@ -201,7 +212,7 @@ export class RemoteBridge extends EventEmitter {
     this.#connection?.stop();
     this.#connection = null;
     this.#coordinator.clear();
-    await this.#subscriptions.releaseOwner("remote");
+    this.#subscriptions.clearOwner("remote");
   }
 
   handleConnectionState(state: ConnectionState): void {
@@ -210,7 +221,7 @@ export class RemoteBridge extends EventEmitter {
   }
 
   handleProtocolEvent(event: ProtocolEvent): void {
-    if (!this.#credentials?.enabled) return;
+    if (!this.#ownsRemoteAccess || !this.#credentials?.enabled) return;
     if (event.kind === "server-request") {
       const envelope = record(event.payload);
       const id = envelope.id;
@@ -543,6 +554,20 @@ export class RemoteBridge extends EventEmitter {
       relayUrl: this.#credentials?.relayUrl ?? "",
       paired: active.length > 0,
       passkeys: active.map((device) => ({ id: device.passkey.id, name: device.name, createdAt: device.createdAt, lastUsedAt: device.passkey.lastUsedAt }))
+    });
+  }
+
+  #assertOwnership(): void {
+    if (!this.#ownsRemoteAccess) throw new Error("远程访问正由另一个应用实例管理。关闭另一个实例后，请重启本窗口接管。");
+  }
+
+  #showStandbyStatus(): void {
+    this.#syncCredentialStatus();
+    this.#updateStatus({
+      enabled: this.#credentials?.enabled ?? false,
+      phase: "standby",
+      message: "由另一个应用实例管理；关闭该实例后，请重启本窗口接管",
+      pairing: null
     });
   }
 

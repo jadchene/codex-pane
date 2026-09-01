@@ -122,7 +122,7 @@ export type RemoteSettings = z.infer<typeof remoteSettingsSchema>;
 export type RemotePairingInfo = { pairingId: string; url: string; code: string; expiresAt: number; readyToConfirm: boolean };
 export type RemoteAccessStatus = {
   enabled: boolean;
-  phase: "disabled" | "connecting" | "pairing" | "connected" | "error";
+  phase: "disabled" | "standby" | "connecting" | "pairing" | "connected" | "error";
   message: string;
   relayUrl: string;
   paired: boolean;

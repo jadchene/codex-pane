@@ -81,7 +81,10 @@ test("completes the real thin-relay pairing, Passkey, E2EE, UI delivery, and con
   relay.stderr?.on("data", (data) => process.stdout.write(`[relay:stderr] ${String(data)}`));
   await waitForRelay(relayOrigin, relay);
 
-  const application = await electron.launch({ args: ["--no-sandbox", "--disable-gpu", "--in-process-gpu", "--use-angle=swiftshader", "--use-gl=angle", resolve(".")], env: isolatedEnv(requestLog) });
+  const desktopEnvironment = isolatedEnv(requestLog);
+  const applications: ElectronApplication[] = [];
+  const application = await electron.launch({ args: ["--no-sandbox", "--disable-gpu", "--in-process-gpu", "--use-angle=swiftshader", "--use-gl=angle", resolve(".")], env: desktopEnvironment });
+  applications.push(application);
   let mobile: Page | null = null;
   try {
     application.process().stderr?.on("data", (data) => process.stdout.write(`[remote-electron:stderr] ${String(data)}`));
@@ -143,6 +146,17 @@ test("completes the real thin-relay pairing, Passkey, E2EE, UI delivery, and con
       return lines.some((line) => line.method === "turn/start" && line.params.threadId === "fixture-thread-a");
     }).toBe(true);
 
+    const standbyApplication = await electron.launch({ args: ["--no-sandbox", "--disable-gpu", "--in-process-gpu", "--use-angle=swiftshader", "--use-gl=angle", resolve(".")], env: desktopEnvironment });
+    applications.push(standbyApplication);
+    standbyApplication.process().stderr?.on("data", (data) => process.stdout.write(`[standby-electron:stderr] ${String(data)}`));
+    const standbyDesktop = await standbyApplication.firstWindow();
+    await expect.poll(async () => (await standbyDesktop.evaluate(() => window.codexPane.getRemoteAccessStatus())).phase).toBe("standby");
+    await standbyDesktop.getByRole("button", { name: "设置" }).click();
+    const standbySettings = standbyDesktop.getByRole("dialog").filter({ hasText: "远程访问" });
+    await expect(standbySettings.getByText("同一时间只有一个应用实例提供远程访问", { exact: false })).toBeVisible();
+    await expect(standbySettings.getByRole("button", { name: "保存并连接" })).toBeDisabled();
+    await expect(frame.getByRole("button", { name: "打开会话列表" })).toBeVisible();
+
     await desktop.evaluate(() => window.codexPane.logoutAllRemoteMobiles());
     await expect(mobile.getByRole("button", { name: "使用 Passkey 登录" })).toBeVisible({ timeout: 15_000 });
     await mobile.getByRole("button", { name: "使用 Passkey 登录" }).click();
@@ -151,9 +165,21 @@ test("completes the real thin-relay pairing, Passkey, E2EE, UI delivery, and con
     const currentStatus = await desktop.evaluate(() => window.codexPane.getRemoteAccessStatus());
     await desktop.evaluate((credentialId) => window.codexPane.revokeRemotePasskey(credentialId), currentStatus.passkeys[0]!.id);
     await expect(mobile.getByText("这部手机的访问权限已撤销，请在桌面端重新生成二维码。", { exact: true })).toBeVisible({ timeout: 10_000 });
+
+    await application.close();
+    applications.splice(applications.indexOf(application), 1);
+    await expect.poll(async () => (await standbyDesktop.evaluate(() => window.codexPane.getRemoteAccessStatus())).phase).toBe("standby");
+    await expect(standbySettings.getByText("请重启本窗口接管", { exact: false })).toBeVisible();
+    await standbyApplication.close();
+    applications.splice(applications.indexOf(standbyApplication), 1);
+
+    const replacementApplication = await electron.launch({ args: ["--no-sandbox", "--disable-gpu", "--in-process-gpu", "--use-angle=swiftshader", "--use-gl=angle", resolve(".")], env: desktopEnvironment });
+    applications.push(replacementApplication);
+    const replacementDesktop = await replacementApplication.firstWindow();
+    await expect.poll(async () => (await replacementDesktop.evaluate(() => window.codexPane.getRemoteAccessStatus())).phase, { timeout: 15_000 }).toBe("connected");
   } finally {
     await testInfo.attach("remote-app-server-requests", { body: await readFile(requestLog, "utf8"), contentType: "application/jsonl" });
-    await application.close();
+    for (const desktopApplication of applications) desktopApplication.process().kill();
     relay.kill();
     await Promise.all([rm(sessionFixtureMarker, { force: true }), rm(requestLog, { force: true })]);
   }

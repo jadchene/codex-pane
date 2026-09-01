@@ -20,6 +20,7 @@ import { redactSensitiveText } from "./sensitive-data.js";
 import { RemoteBridge } from "./remote-bridge.js";
 import { RemoteAuditLog } from "./remote-audit-log.js";
 import { RemoteCredentialStore } from "./remote-credential-store.js";
+import { ProcessOwnershipLease } from "./process-ownership-lease.js";
 
 protocol.registerSchemesAsPrivileged([
   { scheme: "codex-media", privileges: { secure: true, standard: true, supportFetchAPI: true } }
@@ -103,6 +104,8 @@ let fileStore: FileStore;
 let stateStore: StateStore;
 let diagnosticLog: DiagnosticLog;
 let remoteBridge: RemoteBridge;
+let remoteBridgeLease: ProcessOwnershipLease;
+let remoteBridgeStopPromise: Promise<void> | null = null;
 let forceClosing = false;
 let shutdownInProgress = false;
 let closeRequestInFlight = false;
@@ -142,11 +145,17 @@ const listWindowsFonts = async (): Promise<string[]> => {
   return [...new Set(fontNames)].sort((left, right) => left.localeCompare(right, "zh-CN"));
 };
 
+const relinquishRemoteBridge = (): Promise<void> => {
+  remoteBridgeStopPromise ??= remoteBridge?.stop() ?? Promise.resolve();
+  remoteBridgeLease?.release();
+  return remoteBridgeStopPromise;
+};
+
 const shutdownApplication = async (): Promise<void> => {
   if (shutdownInProgress) return;
   shutdownInProgress = true;
   try {
-    await remoteBridge?.stop();
+    await relinquishRemoteBridge();
     await supervisor.stop();
     if (ownsPrimarySession) removePrimarySessionLock();
     forceClosing = true;
@@ -681,10 +690,11 @@ app.whenReady().then(async () => {
     new RemoteCredentialStore(join(dataDirectory, "remote", "credentials.json")),
     new RemoteAuditLog(join(dataDirectory, "remote", "audit.jsonl"))
   );
+  remoteBridgeLease = new ProcessOwnershipLease(join(dataDirectory, "remote", ".bridge-owner"));
   const initialRemotePane = persistedWorkspace?.panes.find((pane) => pane.id === persistedWorkspace.focusedPaneId) ?? persistedWorkspace?.panes[0];
   remoteBridge.updateSessionDefaults({ cwd: persistedWorkspace?.defaultCwd || null, model: initialRemotePane?.model ?? null });
   remoteBridge.on("status", (status) => mainWindow?.webContents.send("remote:status-changed", status));
-  await remoteBridge.initialize();
+  await remoteBridge.initialize(remoteBridgeLease.acquire());
   protocol.handle("codex-media", async (request) => {
     const id = mediaRequestId(request.url, request.method);
     if (!id) return new Response("Not found", { status: 404, headers: { "Content-Type": "text/plain", "X-Content-Type-Options": "nosniff" } });
@@ -730,9 +740,11 @@ app.whenReady().then(async () => {
 
 app.on("window-all-closed", () => app.quit());
 app.on("will-quit", () => {
+  void relinquishRemoteBridge();
   if (ownsPrimarySession) removePrimarySessionLock();
 });
 app.on("before-quit", (event) => {
+  void relinquishRemoteBridge();
   if (forceClosing || !supervisor.isRunning) return;
   event.preventDefault();
   void shutdownApplication();
